@@ -4,6 +4,43 @@ Written 2026-11-16 for the next developer or coding agent. The product spec is t
 
 ## Where things stand
 
+### GitHub and Render authorization (2026-11-16)
+
+Owner explicitly authorized creating the private `anzumr/loodle` repository, committing/pushing the prepared work, and using Render's **My Workspace** (`tea-dbi3hvtg1s2s73dsva1g`) to prepare the deployment plan. This supersedes pending commit/workspace notes below. Applying the planned infrastructure still requires review and approval of the returned Render plan. DNS has not been changed.
+
+### Continuation: Stage 6 Google sign-in and loodle.online hosting preparation (2026-11-16, uncommitted)
+
+- Owner supplied the public Google OAuth web client ID; it is now configured as `GOOGLE_CLIENT_ID` in `render.yaml`. It has not been deployed or tested with live Google sign-in. The older “not supplied” and “supply Google client ID” notes below are superseded. Commit/push and Render workspace confirmation remain pending.
+
+- Owner confirmed ownership of **loodle.online** at Namecheap, GitHub for source, and **guest play plus Google sign-in**. Render is now connected; `list_workspaces` returned “My Workspace”. Confirm that workspace before resource mutations, as required by Render's tool contract. No resources have been created, no GitHub repository/remote has been created, and DNS is unchanged.
+- Server now serves the built website, health endpoint `/healthz`, Google auth endpoints `/api/auth/*`, and WebSockets `/ws` on one port. Vite proxies `/api` and `/ws` locally. Production uses same-origin HTTPS/WSS. `PUBLIC_ORIGIN` is required in production.
+- Google sign-in uses the official `google-auth-library`, audience and nonce validation, CSRF checks, and signed HttpOnly session cookies (Secure in production, 24 hours). Stable Google subjects own signed-in online seats; guest tokens are in a separate namespace. UI retains guest play and hides the Google button when unconfigured. A real Google OAuth web client ID has been requested but not supplied.
+- Accounts are an initial identity foundation: no profile database, cloud saves/progression, account merging, or completed Stage 6 v3 specification. Signing in does not transfer guest rooms. Local offline saves stay local. Authentication is tested with mocked Google verification and locally signed test sessions, **not** a live Google login.
+- Added `Dockerfile`, `.dockerignore`, `render.yaml`, GitHub web CI, and `docs/HOSTING.md`. Proposed Render compute is paid `0.5c-512mb`, one instance; no plan has been purchased or approved. Auto-deploy is off. Docker Desktop's engine is stopped, so no local container-build claim. Room persistence is still missing: restarts lose online matches.
+- Added message limits, room/socket caps, WebSocket origin validation, static-file path restrictions and graceful shutdown. Authenticated clients cannot be impersonated with guest tokens.
+- Checks: **112 tests pass**, typecheck and production build pass. Hosting smoke passed HTTP/assets, origin rejection, signed-account seat recovery and guest impersonation rejection. The long rules simulation now has a 20-second test deadline because the larger parallel suite exceeded its prior five-second limit; assertions are unchanged. Browser rendering, live Google consent, actual hosting/TLS and DNS cutover remain unverified.
+- A full real-socket match through `/ws` also passed: automatic reconnect preserved the seat, and both clients agreed after 148 actions.
+- Next: review and authorize committing/pushing the prepared changes to a private `anzumr/loodle` repo; confirm Render workspace; create a deployment plan and review it before provisioning; supply Google client ID; deploy and then update only Namecheap web records. Full instructions: `docs/HOSTING.md`.
+
+### Continuation: Stage 5 connection recovery and timers (2026-11-16, uncommitted)
+
+- Client automatically reconnects with bounded backoff, rejoining the last acknowledged room with the same token. Room codes are remembered per test identity and rejoined on reload. Controls wait for fresh server state; roll/move requests are never replayed. Closing the room cancels retries. A missing/expired room ends retries with the server error.
+- Online sessions retain the offline match separately and restore it on leaving or a rejected join. Offline storage is not overwritten by online updates. This integration has been inspected but has not been browser-tested.
+- Server gives **30 seconds per action** (each roll or pawn choice), then rolls or selects a legal medium-AI move automatically. Rejoining cannot extend the deadline. Empty rooms do not auto-play. Clients show the deadline and explain automatic play before starting.
+- WebSocket ping/pong detects dead peers; idle cleanup now retains occupied rooms. HTTPS pages default to `wss://`, but TLS hosting is still not deployed.
+- Validation: **95 tests pass**, typecheck and production build pass (existing bundle-size warning). `npm run smoke:reconnect -w @loodl/server` used the actual browser connection controller over real sockets, recovered its seat automatically and finished a 158-action match with identical client states. Existing `smoke` also passed (202 actions, disconnect/rejoin, identical results). Temporary servers were stopped. No browser rendering/touch checks were run.
+- Still outstanding in Stage 5: casual matchmaking, rematches, durable room persistence, deployment/TLS termination, rate limiting, multiple server processes and two-browser-context tests. Stage 4 practice/challenges/campaign and Stage 0 mobile/PWA work remain unfinished.
+- This section supersedes older reconnect, absent-player and offline-save gaps below. No commits were made.
+
+### Continuation: interactive tutorial (2026-11-16, uncommitted)
+
+- Added **PLAY → Learn by playing**, also accessible from How to play: eight independent board lessons covering entry, movement, capture, safety, blockades, overshooting, finishing, and three sixes.
+- `apps/web/src/tutorial.ts` owns lesson positions and scripted dice; all actions run through the existing rules engine. `apps/web/src/ui/Tutorial.tsx` owns the tutorial board and controls, with manual pawn selection, keyboard buttons, restart and exit. The lobby renderer is disposed while the tutorial is open.
+- Tutorial state is separate from saved/offline/online matches and is not persisted. No changes to locked rules or normal random dice.
+- Validation: 86 tests pass (including 11 tutorial tests), typecheck and production build pass. The existing large-bundle warning remains. Browser layout, touch interactions and save/resume integration have not been browser-tested in this continuation.
+- Next Stage 4 work: practice mode and challenge scenarios, then campaign framework, mode-aware AI and browser smoke tests. Extract existing match flow from `App.tsx` before expanding the match modes. Shorter quick layouts and turn timers remain outstanding.
+- The original status below describes the prior handoff; its “tutorial not started” entries are superseded by this section.
+
 Branch: `web/stage0-foundation`. No remote is configured; nothing has been pushed.
 
 | Commit | Contents |

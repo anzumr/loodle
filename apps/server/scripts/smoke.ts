@@ -73,6 +73,7 @@ for (;;) {
     reconnected = true;
   }
   const me = match.turn.seat === a.state.last!.room.players[0]!.seat ? a : b;
+  await new Promise((resolve) => setTimeout(resolve, 400)); // respect public-server message limits
   me.send(match.turn.phase === 'roll' ? { t: 'roll' } : { t: 'move', pawn: legalMoves(match)[0]!.pawn });
   const version = match.version;
   await until(() => a.state.last!.room.match!.version > version, `action ${actions}`);

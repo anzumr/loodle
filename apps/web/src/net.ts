@@ -7,11 +7,23 @@ export interface RoomView {
   host: number;
   players: { name: string; seat: Seat | null; connected: boolean }[];
   match: MatchState | null;
+  actionDeadline: number | null;
 }
 
 export type ServerMessage = { t: 'room'; room: RoomView; you: number; events: GameEvent[] } | { t: 'error'; message: string };
 
-const SERVER_URL = (import.meta.env.VITE_SERVER_URL as string | undefined) || `ws://${location.hostname}:8787`;
+const serverUrl = () => (import.meta.env.VITE_SERVER_URL as string | undefined) || `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
+
+const roomKey = () => `loodl.room${new URLSearchParams(location.search).get('p') ?? ''}`;
+export function rememberedRoom(): string | null {
+  try { return localStorage.getItem(roomKey()); } catch { return null; }
+}
+export function rememberRoom(code: string | null) {
+  try {
+    if (code) localStorage.setItem(roomKey(), code);
+    else localStorage.removeItem(roomKey());
+  } catch { /* Reconnect still works in memory when storage is unavailable. */ }
+}
 
 /**
  * A secret that identifies this browser to the server so a dropped connection
@@ -37,18 +49,72 @@ export interface Connection {
   close(): void;
 }
 
-/** Open a connection and send `first` as soon as it is ready. */
-export function connect(first: object, onMessage: (m: ServerMessage) => void, onClose: () => void): Connection {
-  const ws = new WebSocket(SERVER_URL);
-  let closedByUs = false;
-  ws.onopen = () => ws.send(JSON.stringify(first));
-  ws.onmessage = (e) => onMessage(JSON.parse(String(e.data)) as ServerMessage);
-  ws.onclose = () => !closedByUs && onClose();
+export type ConnectionStatus = 'connecting' | 'reconnecting' | 'connected' | 'failed';
+export type Entry = { t: 'create'; variant: string; token: string; name: string } | { t: 'join'; code: string; token: string; name: string };
+
+/** Rejoin with the same identity, never replaying a roll or move after a drop. */
+export function connect(first: Entry, onMessage: (m: ServerMessage) => void, onStatus: (status: ConnectionStatus) => void, url = serverUrl()): Connection {
+  let ws: WebSocket | null = null;
+  let stopped = false;
+  let ready = false;
+  let attempts = 0;
+  let entry = first;
+  let retry: ReturnType<typeof setTimeout> | undefined;
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+
+  const stop = () => {
+    stopped = true;
+    ready = false;
+    clearTimeout(retry);
+    clearTimeout(deadline);
+    ws?.close();
+  };
+  const schedule = () => {
+    if (stopped) return;
+    ready = false;
+    clearTimeout(deadline);
+    onStatus('reconnecting');
+    retry = setTimeout(open, Math.min(1000 * 2 ** Math.min(attempts++, 4), 10_000));
+  };
+  const open = () => {
+    if (stopped) return;
+    let socket: WebSocket;
+    try { socket = new WebSocket(url); } catch { schedule(); return; }
+    ws = socket;
+    // Ignore late callbacks from superseded sockets, including the handshake timeout.
+    const current = () => !stopped && ws === socket;
+    deadline = setTimeout(() => {
+      if (!current() || ready) return;
+      ws = null;
+      socket.close();
+      schedule();
+    }, 10_000);
+    socket.onopen = () => { if (current()) socket.send(JSON.stringify(entry)); };
+    socket.onmessage = (event) => {
+      if (!current()) return;
+      let message: ServerMessage;
+      try { message = JSON.parse(String(event.data)) as ServerMessage; } catch { return; }
+      if (message.t === 'room') {
+        entry = { t: 'join', code: message.room.code, token: first.token, name: first.name };
+        rememberRoom(message.room.code);
+        ready = true;
+        attempts = 0;
+        clearTimeout(deadline);
+        onStatus('connected');
+      } else if (message.t === 'error' && !ready) {
+        stop();
+        rememberRoom(null);
+        onStatus('failed');
+      }
+      onMessage(message);
+    };
+    socket.onclose = () => { if (current()) { ws = null; schedule(); } };
+    socket.onerror = () => { /* close or the handshake deadline triggers retry */ };
+  };
+  onStatus('connecting');
+  open();
   return {
-    send: (message) => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify(message)),
-    close: () => {
-      closedByUs = true;
-      ws.close();
-    },
+    send: (message) => { if (ready && ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message)); },
+    close: stop,
   };
 }

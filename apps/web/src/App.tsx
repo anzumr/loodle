@@ -20,8 +20,10 @@ import {
 import { BoardScene, type CameraMode, type Quality } from './scene/BoardScene';
 import { Logo } from './ui/Logo';
 import { Die } from './ui/Die';
+import { Tutorial } from './ui/Tutorial';
+import { AccountPanel, type Account } from './ui/AccountPanel';
 import { play, setSoundEnabled, type Sfx } from './sound';
-import { connect, playerToken, type Connection, type RoomView, type ServerMessage } from './net';
+import { connect, playerToken, rememberedRoom, rememberRoom, type Connection, type ConnectionStatus, type RoomView, type ServerMessage } from './net';
 import { Back, Chest, Chevron, Crown, Gear, Pawn, People } from './ui/icons';
 
 type Screen = 'lobby' | 'board';
@@ -117,8 +119,10 @@ export function App() {
   const host = useRef<HTMLDivElement>(null);
   const scene = useRef<BoardScene | null>(null);
   const [screen, setScreen] = useState<Screen>('lobby');
+  const [tutorial, setTutorial] = useState(false);
   const [view, setView] = useState<View>('angled');
-  const [sheet, setSheet] = useState<'play' | 'settings' | 'help' | 'friends' | null>(null);
+  const [sheet, setSheet] = useState<'play' | 'settings' | 'help' | 'friends' | 'account' | null>(null);
+  const [account, setAccount] = useState<Account | null>(null);
   const [variant, setVariant] = useState<Variant>('classic');
   const [quality, setQuality] = useState<Quality>(loadQuality);
   const saved = useMemo(loadSaved, []);
@@ -138,6 +142,10 @@ export function App() {
   const [face, setFace] = useState(6);
   const [rolling, setRolling] = useState(false);
   const [online, setOnline] = useState<{ room: RoomView; you: number } | null>(null);
+  const [netStatus, setNetStatus] = useState<ConnectionStatus | 'offline'>('offline');
+  const [networkSession, setNetworkSession] = useState(false);
+  const offlineMatch = useRef<Saved | null>(null);
+  const [now, setNow] = useState(Date.now);
   const [netError, setNetError] = useState('');
   const [name, setName] = useState(() => {
     try {
@@ -149,18 +157,42 @@ export function App() {
   const [code, setCode] = useState('');
   const conn = useRef<Connection | null>(null);
 
+  useEffect(() => {
+    let active = true;
+    void fetch('/api/auth/session').then(async (response) => {
+      if (response.ok) {
+        const result = await response.json() as { user: Account | null };
+        if (active) setAccount(result.user);
+      }
+    }).catch(() => { /* Offline guest play does not require the server. */ });
+    return () => { active = false; };
+  }, []);
+
+  const restoreOffline = () => {
+    setOnline(null);
+    setNetworkSession(false);
+    setNetStatus('offline');
+    setMatch(offlineMatch.current?.match ?? null);
+    if (offlineMatch.current) {
+      setHumans(offlineMatch.current.humans);
+      setLevel(offlineMatch.current.level);
+    }
+    setScreen('lobby');
+  };
+
   const leaveRoom = () => {
     conn.current?.send({ t: 'leave' });
     conn.current?.close();
     conn.current = null;
-    setOnline(null);
-    setMatch(null);
-    setScreen('lobby');
+    rememberRoom(null);
+    restoreOffline();
   };
 
   /** Create a room, or join one by code. The server owns the match from here on. */
   const enterRoom = (first: { t: 'create'; variant: string } | { t: 'join'; code: string }) => {
     setNetError('');
+    if (!networkSession) offlineMatch.current = match ? { match, humans, level } : null;
+    setNetworkSession(true);
     try {
       localStorage.setItem('loodl.name', name);
     } catch {
@@ -172,33 +204,56 @@ export function App() {
       (m: ServerMessage) => {
         if (m.t === 'error') return setNetError(m.message);
         setOnline({ room: m.room, you: m.you });
+        setNow(Date.now());
+        setCode(m.room.code);
+        setNetError('');
         const mine = m.room.players[m.you]?.seat;
-        if (!m.room.match || mine === null || mine === undefined) return;
+        if (!m.room.match || mine === null || mine === undefined) {
+          setSheet('friends');
+          return;
+        }
         setHumans([mine]);
         setMatch(m.room.match);
         setSheet(null);
         setScreen('board');
         const rolled = m.events.find((e) => e.type === 'rolled');
         if (rolled && rolled.type === 'rolled') setFace(rolled.value);
+        else if (m.room.match.turn.die !== null) setFace(m.room.match.turn.die);
         if (m.events.length) setMessage(describe(m.events));
         const sfx = (Object.keys(SOUNDS) as GameEvent['type'][]).find((type) => m.events.some((e) => e.type === type));
         if (sfx) play(SOUNDS[sfx]!);
         else if (rolled) play('roll');
       },
-      () => {
-        conn.current = null;
-        setOnline(null);
-        setNetError('Lost connection to the game server. Join again with the same code to take your seat back.');
-        setMatch(null);
-        setScreen('lobby');
-        setSheet('friends');
+      (status) => {
+        setNetStatus(status);
+        if (status === 'failed') {
+          conn.current = null;
+          restoreOffline();
+          setSheet('friends');
+        }
       },
     );
   };
 
+  useEffect(() => {
+    const previousRoom = rememberedRoom();
+    if (previousRoom) {
+      setCode(previousRoom);
+      setSheet('friends');
+      enterRoom({ t: 'join', code: previousRoom });
+    }
+    return () => { conn.current?.close(); conn.current = null; };
+  }, []);
+
+  useEffect(() => {
+    if (!networkSession) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [networkSession]);
+
   const moves = useMemo(() => (match?.turn.phase === 'move' ? legalMoves(match) : []), [match]);
   // If every legal move starts from the same spot there is nothing to choose.
-  const human = !!match && humans.includes(match.turn.seat);
+  const human = !!match && humans.includes(match.turn.seat) && (!networkSession || netStatus === 'connected');
   const forced = human && moves.length > 0 && moves.every((m) => m.from === moves[0]!.from);
 
   const act = useCallback((state: MatchState, action: Parameters<typeof applyAction>[1]) => {
@@ -211,15 +266,17 @@ export function App() {
 
   const move = useCallback(
     (pawn: number) => {
+      if (!human) return;
       if (match?.turn.phase !== 'move' || !moves.some((m) => m.pawn === pawn)) return;
       if (online) conn.current?.send({ t: 'move', pawn });
       else act(match, { type: 'move', seat: match.turn.seat, pawn });
     },
-    [match, moves, act, online],
+    [match, moves, act, online, human],
   );
 
   const roll = () => {
     if (!match || match.turn.phase !== 'roll' || rolling) return;
+    if (networkSession && netStatus !== 'connected') return;
     if (online) return void conn.current?.send({ t: 'roll' }); // the server rolls
     setRolling(true);
     setMessage('');
@@ -233,28 +290,29 @@ export function App() {
   };
 
   useEffect(() => {
+    if (tutorial) return;
     const s = new BoardScene(host.current!);
     scene.current = s;
     return () => {
       s.dispose();
       scene.current = null;
     };
-  }, []);
+  }, [tutorial]);
 
   useEffect(() => {
     if (scene.current) scene.current.onPawnTap = move;
-  }, [move]);
+  }, [move, tutorial]);
 
   useEffect(() => {
     scene.current?.setMode(screen === 'lobby' ? 'lobby' : view);
-  }, [screen, view]);
+  }, [screen, view, tutorial]);
 
   useEffect(() => {
     const showing = screen === 'board' && match;
     scene.current?.setView(
       showing ? { pawns: match.pawns, seat: match.turn.seat, movable: forced || !human ? [] : moves.map((m) => m.pawn) } : null,
     );
-  }, [screen, match, moves, forced, human]);
+  }, [screen, match, moves, forced, human, tutorial]);
 
   useEffect(() => {
     if (!forced || screen !== 'board') return;
@@ -264,7 +322,7 @@ export function App() {
 
   // Computer players: roll, then choose a move. They only pick among legal moves.
   useEffect(() => {
-    if (online || !match || screen !== 'board' || match.turn.phase === 'over' || human || rolling) return;
+    if (networkSession || !match || screen !== 'board' || match.turn.phase === 'over' || human || rolling) return;
     const seat = match.turn.seat;
     const id = window.setTimeout(
       () => (match.turn.phase === 'roll' ? roll() : act(match, { type: 'move', seat, pawn: chooseMove(match, level, Math.random) })),
@@ -272,18 +330,18 @@ export function App() {
     );
     return () => window.clearTimeout(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [match, screen, human, rolling, level, online]);
+  }, [match, screen, human, rolling, level, networkSession]);
 
   // Keep the match across reloads.
   useEffect(() => {
-    if (online) return; // online matches live on the server
+    if (networkSession) return; // online matches live on the server; preserve the offline save
     try {
       if (match && match.turn.phase !== 'over') localStorage.setItem(SAVE_KEY, JSON.stringify({ match: serializeMatch(match), humans, level }));
       else localStorage.removeItem(SAVE_KEY);
     } catch {
       /* storage unavailable: the match just won't survive a reload */
     }
-  }, [match, humans, level, online]);
+  }, [match, humans, level, networkSession]);
 
   useEffect(() => {
     setSoundEnabled(sound);
@@ -301,7 +359,7 @@ export function App() {
     } catch {
       /* storage unavailable: setting just won't persist */
     }
-  }, [quality]);
+  }, [quality, tutorial]);
 
   const startMatch = () => {
     const fresh = createMatch({ players, config: VARIANTS[variant].rules });
@@ -320,22 +378,23 @@ export function App() {
   const who = (seat: Seat) => (!vsAi ? seatName(seat) : humans.includes(seat) ? 'You' : rival(seat));
 
   return (
-    <div className={`app screen-${screen}`}>
+    <>
+    <div className={`app screen-${screen}`} inert={tutorial || undefined} aria-hidden={tutorial || undefined}>
       <div className="backdrop" aria-hidden="true" />
       <div className="stage" ref={host} />
 
       {screen === 'lobby' && (
         <div className="ui lobby">
           <header className="topbar">
-            <div className="profile">
+            <button className="profile profile-button" disabled={networkSession} onClick={() => setSheet('account')} aria-label="Account and sign-in">
               <span className="avatar">
                 <Pawn />
               </span>
               <span className="profile-text">
-                <strong>Guest</strong>
-                <small>No sign-up needed</small>
+                <strong>{account?.name ?? 'Guest'}</strong>
+                <small>{account ? 'Google account' : 'Play as guest or sign in'}</small>
               </span>
-            </div>
+            </button>
             <button className="round-btn" aria-label="Settings" onClick={() => setSheet('settings')}>
               <Gear />
             </button>
@@ -402,8 +461,9 @@ export function App() {
 
           {!over && (
             <footer className="board-foot">
+              {online?.room.actionDeadline && <small role="status">{Math.max(0, Math.ceil((online.room.actionDeadline - now) / 1000))}s · server plays automatically when time runs out</small>}
               <div className="readout" aria-live="polite">
-                {(forced || !human ? message.replace(' — tap a pawn', '') : message) ||
+                {networkSession && netStatus !== 'connected' ? 'Connection lost — reconnecting…' : (forced || !human ? message.replace(' — tap a pawn', '') : message) ||
                   (!human ? (online ? `Waiting for ${rival(turn.seat)}…` : `${RIVALS[level]} is playing…`) : turn.phase === 'roll' ? 'Roll the die' : 'Tap a pawn')}
               </div>
               <div className="roll-row">
@@ -531,6 +591,13 @@ export function App() {
             </span>
             <Chevron />
           </button>
+          <button className="mode" onClick={() => (setSheet(null), setTutorial(true))}>
+            <span>
+              <strong>Learn by playing</strong>
+              <small>Eight guided lessons on the board</small>
+            </span>
+            <Chevron />
+          </button>
           <button className="mode" onClick={() => setSheet('friends')}>
             <span>
               <strong>Friends</strong>
@@ -554,9 +621,10 @@ export function App() {
       )}
 
       {sheet === 'friends' && (
-        <Sheet title="Play with friends" onClose={() => (online && !online.room.match ? leaveRoom() : null, setSheet(null))}>
+        <Sheet title="Play with friends" onClose={() => (networkSession ? leaveRoom() : null, setSheet(null))}>
           {netError && <p className="net-error">{netError}</p>}
-          {!online ? (
+          {networkSession && netStatus !== 'connected' && <p className="hint" role="status">{netStatus === 'connecting' ? 'Connecting…' : 'Connection lost — retrying automatically…'} Close this panel to cancel.</p>}
+          {!online && !networkSession ? (
             <>
               <label className="setting">
                 <span>
@@ -585,11 +653,12 @@ export function App() {
                 <Chevron />
               </button>
             </>
-          ) : (
+          ) : online ? (
             <>
               <div className="setting stacked room-code">
                 <small>Share this code</small>
                 <strong>{online.room.code}</strong>
+                <small>30 seconds per roll or move, then automatic play</small>
               </div>
               {online.room.players.map((pl, i) => (
                 <div className="setting" key={i}>
@@ -597,11 +666,11 @@ export function App() {
                     {pl.name}
                     {i === online.you ? ' (you)' : ''}
                   </strong>
-                  <small>{i === online.room.host ? 'Host' : 'Joined'}</small>
+                  <small>{!pl.connected ? 'Disconnected' : i === online.room.host ? 'Host' : 'Joined'}</small>
                 </div>
               ))}
               {online.you === online.room.host ? (
-                <button className="mode on" disabled={online.room.players.length < 2} onClick={() => conn.current?.send({ t: 'start' })}>
+                <button className="mode on" disabled={netStatus !== 'connected' || online.room.players.length < 2} onClick={() => conn.current?.send({ t: 'start' })}>
                   <span>
                     <strong>Start match</strong>
                     <small>{online.room.players.length < 2 ? 'Waiting for another player…' : `${online.room.players.length} players ready`}</small>
@@ -612,12 +681,16 @@ export function App() {
                 <p className="hint">Waiting for the host to start…</p>
               )}
             </>
-          )}
+          ) : null}
         </Sheet>
       )}
 
       {sheet === 'help' && (
         <Sheet title="How to play" onClose={() => setSheet('play')}>
+          <button className="mode on" onClick={() => (setSheet(null), setTutorial(true))}>
+            <span><strong>Try the interactive tutorial</strong><small>Practice each rule on the board</small></span>
+            <Chevron />
+          </button>
           <ol className="howto">
             {HOW_TO_PLAY.map((line) => (
               <li key={line}>{line}</li>
@@ -625,6 +698,8 @@ export function App() {
           </ol>
         </Sheet>
       )}
+
+      {sheet === 'account' && <Sheet title="Your account" onClose={() => setSheet(null)}><AccountPanel onChange={setAccount} /></Sheet>}
 
       {sheet === 'settings' && (
         <Sheet title="Settings" onClose={() => setSheet(null)}>
@@ -656,6 +731,8 @@ export function App() {
         </Sheet>
       )}
     </div>
+    {tutorial && <Tutorial quality={quality} onClose={() => (setTutorial(false), setSheet('play'))} />}
+    </>
   );
 }
 

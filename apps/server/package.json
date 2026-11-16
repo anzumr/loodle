@@ -6,10 +6,13 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
-    "smoke": "tsx scripts/smoke.ts"
+    "smoke": "tsx scripts/smoke.ts",
+    "smoke:reconnect": "tsx scripts/reconnect-smoke.ts",
+    "smoke:hosting": "tsx scripts/hosting-smoke.ts"
   },
   "dependencies": {
     "@loodl/rules": "*",
+    "google-auth-library": "^11.3.4",
     "tsx": "^4.19.0",
     "ws": "^8.18.0"
   },

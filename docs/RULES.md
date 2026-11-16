@@ -51,4 +51,10 @@ Measured with medium AI on all four seats over 20 matches each, both quick modes
 
 ## Not built yet
 
-Teams, shorter quick layouts, turn timers, 5–8 player layouts, tutorial, practice, campaign, and seat-balance statistics.
+Teams, shorter quick layouts, offline turn timers, 5–8 player layouts, practice, campaign, and seat-balance statistics.
+
+## Online action deadlines
+
+Private rooms allow 30 seconds for each roll or pawn choice. At expiry the server rolls its own die or chooses a legal move with the medium AI. Every action gets a fresh deadline; reconnecting does not extend it. Normal rules, including the third-six forfeit, still apply. Rooms with no connected players stop automatic play and remain subject to idle expiry.
+
+The interactive tutorial uses eight independent positions and preset dice through the same rules engine. It does not alter normal match dice or saved matches.

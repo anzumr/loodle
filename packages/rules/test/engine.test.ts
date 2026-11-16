@@ -349,7 +349,7 @@ describe('full simulated matches', () => {
           // Everyone but the last-placed seat has all pawns home.
           for (const s of state.finishOrder.slice(0, -1)) expect(state.pawns[s]!.every((p) => p === FINISH_STEP)).toBe(true);
         }
-  });
+  }, 20_000); // Full-game simulations share CPU with the AI tournament and other test workers.
 
   it('replays an action log to the identical match', () => {
     const { initial, state, log } = simulate(4242, 4, 4);

@@ -2,9 +2,13 @@
 
 A web-first 3D multiplayer Ludo game. Roll. Rival. Repeat.
 
-Current state: **offline play works.** Classic, Quick Race and Quick Clash for two to four players, either pass-and-play on one device or solo against five levels of computer rival, with sound and matches that survive a reload. Friends can also play online in a private room with an invite code when the game server is running (`npm run server`). There are no accounts, matchmaking or deployment yet. See `HANDOFF.md` for detailed status.
+Current state: **offline play works.** Classic, Quick Race and Quick Clash for two to four players, either pass-and-play on one device or solo against five levels of computer rival, with sound and matches that survive a reload. Friends can also play online in a private room with an invite code when the game server is running (`npm run server`). Optional Google sign-in is implemented and requires server configuration; guest play remains available. Public hosting is prepared but not deployed. See `HANDOFF.md` for detailed status and `docs/HOSTING.md` for loodle.online deployment and Google setup.
 
 ## Run it
+
+Choose **PLAY → Learn by playing** for eight interactive lessons with preset dice, from leaving the yard to the third-six rule. Lessons run separately from saved matches and can be restarted or exited at any time.
+
+Friends rooms reconnect automatically after a drop or reload while the room still exists. Each online roll or pawn choice has a 30-second deadline, after which the server plays automatically. Leaving a room restores your previous offline match. Rooms still live only in server memory.
 
 Requires Node 20 or newer.
 
@@ -19,6 +23,9 @@ Open http://localhost:5173. To try it on a phone, open the "Network" address Vit
 |---|---|
 | `npm run dev` | Website dev server with hot reload |
 | `npm run server` | Game server for Friends rooms (ws://localhost:8787) |
+| `npm start` | Serve the built website and multiplayer together on http://localhost:8787 |
+| `npm run smoke:hosting -w @loodl/server` | Self-contained local HTTP, auth-session and WebSocket protection checks |
+| `npm run smoke:reconnect -w @loodl/server` | Full two-client socket match with automatic reconnect (requires running server) |
 | `npm test` | Rules/board tests (Vitest) |
 | `npm run typecheck` | TypeScript check for all packages |
 | `npm run build` | Production build into `apps/web/dist` |

@@ -1,0 +1,19 @@
+# Review the paid 0.5 CPU / 512 MB plan before creating this service.
+services:
+  - type: web
+    name: loodle
+    runtime: docker
+    plan: 0.5c-512mb
+    numInstances: 1
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+    autoDeployTrigger: 'off'
+    domains:
+      - loodle.online
+    envVars:
+      - key: PUBLIC_ORIGIN
+        value: https://loodle.online,https://www.loodle.online
+      - key: AUTH_SECRET
+        generateValue: true
+      - key: GOOGLE_CLIENT_ID
+        value: 406296107884-6ud57ig4eb8aq8oglt35b1mu1fnn6kkl.apps.googleusercontent.com

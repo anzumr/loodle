@@ -9,6 +9,7 @@ import {
   QUICK_CLASH_RULES,
   QUICK_RACE_RULES,
   applyAction,
+  chooseMove,
   createMatch,
   defaultSeats,
   type Dice,
@@ -20,6 +21,7 @@ import {
 export const VARIANTS = { classic: CLASSIC_RULES, race: QUICK_RACE_RULES, clash: QUICK_CLASH_RULES } as const;
 export type Variant = keyof typeof VARIANTS;
 export const MAX_PLAYERS = 4;
+export const ACTION_TIMEOUT_MS = 30_000;
 
 export class RoomError extends Error {}
 
@@ -39,6 +41,7 @@ export interface RoomView {
   host: number;
   players: { name: string; seat: Seat | null; connected: boolean }[];
   match: MatchState | null;
+  actionDeadline: number | null;
 }
 
 /** 3–16 letters, numbers or underscores; anything else becomes "Guest". */
@@ -48,6 +51,7 @@ export const cleanName = (name: unknown): string =>
 export class Room {
   private players: Player[] = [];
   private match: MatchState | null = null;
+  private actionDeadline: number | null = null;
   /** Last time anything happened, for clearing out abandoned rooms. */
   touched = Date.now();
 
@@ -96,6 +100,7 @@ export class Room {
     const seats = defaultSeats(this.players.length);
     this.players.forEach((p, i) => (p.seat = seats[i]!));
     this.match = createMatch({ seats, config: VARIANTS[this.variant] });
+    this.actionDeadline = Date.now() + ACTION_TIMEOUT_MS;
   }
 
   private turnOf(token: string): { match: MatchState; seat: Seat } {
@@ -120,7 +125,17 @@ export class Room {
   private apply(result: { state: MatchState; events: GameEvent[] }): GameEvent[] {
     this.touched = Date.now();
     this.match = result.state;
+    this.actionDeadline = this.match.turn.phase === 'over' ? null : Date.now() + ACTION_TIMEOUT_MS;
     return result.events;
+  }
+
+  /** One authoritative action per deadline. Empty rooms remain idle for expiry. */
+  tick(now = Date.now()): GameEvent[] {
+    if (this.empty || !this.match || this.actionDeadline === null || now < this.actionDeadline) return [];
+    const seat = this.match.turn.seat;
+    return this.apply(applyAction(this.match, this.match.turn.phase === 'roll'
+      ? { type: 'roll', seat, value: this.dice.roll() }
+      : { type: 'move', seat, pawn: chooseMove(this.match, 'medium', () => 0.5) }));
   }
 
   get empty(): boolean {
@@ -134,6 +149,7 @@ export class Room {
       host: 0,
       players: this.players.map(({ name, seat, connected }) => ({ name, seat, connected })),
       match: this.match,
+      actionDeadline: this.actionDeadline,
     };
   }
 }
