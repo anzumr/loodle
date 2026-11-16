@@ -4,6 +4,13 @@ Written 2026-11-16 for the next developer or coding agent. The product spec is t
 
 ## Where things stand
 
+### Free-tier deployment selection (2026-11-16)
+
+- Source is pushed to private `https://github.com/anzumr/loodle`, branch `codex/loodle-hosting`. GitHub web CI (including Docker build) and legacy Core tests passed for the initial release commit.
+- Render GitHub access is fixed. Existing Blueprint: `exs-dbtiu9jl550s73ddm7c0`, workspace `tea-dbi3hvtg1s2s73dsva1g`; reuse this Blueprint, do not create a duplicate. Its first paid-plan attempt failed with `need_payment_info` and applied no infrastructure.
+- Owner chose the **free tier**. `render.yaml` now uses `plan: free`. Free web services may sleep after 15 minutes without inbound traffic and take about a minute to wake. Online rooms are memory-only and disappear on restart; monthly free instance hours are shared across workspace services.
+- Push this configuration and re-plan the existing Blueprint. Review the returned plan with the owner before applying it, as required by Render's approval tool. DNS remains unchanged.
+
 ### GitHub and Render authorization (2026-11-16)
 
 Owner explicitly authorized creating the private `anzumr/loodle` repository, committing/pushing the prepared work, and using Render's **My Workspace** (`tea-dbi3hvtg1s2s73dsva1g`) to prepare the deployment plan. This supersedes pending commit/workspace notes below. Applying the planned infrastructure still requires review and approval of the returned Render plan. DNS has not been changed.

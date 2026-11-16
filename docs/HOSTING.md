@@ -6,7 +6,7 @@ Status: deployment files and local hosting checks are prepared. **The domain has
 
 One Node process serves the built website, `/api/auth/*`, `/healthz`, and multiplayer at `/ws`. A managed host terminates HTTPS and WSS on the same domain. GitHub stores source and runs CI; GitHub Pages cannot run this Node/WebSocket backend.
 
-`Dockerfile` builds the website and runs the server as a non-root user. `render.yaml` prepares a single paid Render service using the currently documented `0.5c-512mb` plan. Automatic deployment is disabled. **Review the hosting plan and price before provisioning.** No paid service has been created.
+`Dockerfile` builds the website and runs the server as a non-root user. The owner selected Render's **free** web-service plan in `render.yaml`. Automatic deployment is disabled. Free services sleep after 15 minutes without inbound traffic and typically take about a minute to wake. Free instance hours are shared across the workspace, including the existing project-trace service. No paid service has been created.
 
 Rooms still live in memory. Deploys/restarts lose online matches; use one instance until shared persistence is implemented. Google account identity is stable, but no account database, cloud saves, match history, account linking or cross-device offline progression exists yet. Treat this as an initial public playtest, not a completed production service.
 

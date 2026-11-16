@@ -1,10 +1,9 @@
-# Review the paid 0.5 CPU / 512 MB plan before creating this service.
+# Owner-selected free tier for the initial public playtest.
 services:
   - type: web
     name: loodle
     runtime: docker
-    plan: 0.5c-512mb
-    numInstances: 1
+    plan: free
     dockerfilePath: ./Dockerfile
     healthCheckPath: /healthz
     autoDeployTrigger: 'off'
