@@ -4,6 +4,13 @@ Written 2026-11-16 for the next developer or coding agent. The product spec is t
 
 ## Where things stand
 
+### Live Render deployment (2026-11-16)
+
+- Owner approved and deployed the free-tier Blueprint. Service `srv-dbtj1mei0phs73dgdf60` (`loodle-n26t`) is live at `https://loodle-n26t.onrender.com`, in My Workspace. Current verified deploy: `dep-dbtj2ap5efls73f9p170`, source commit `45d9d68104badfb16cc1a418adccb3e4e0a683bf`. Blueprint `exs-dbtiu9jl550s73ddm7c0` is manually synced; auto-deploy remains off.
+- Live checks passed: homepage HTTP 200, `/healthz`, Google client configuration, two-client room join, server roll/state agreement and seat recovery over WSS using the real Render browser origin. Google login itself has not been tested.
+- `PUBLIC_ORIGIN` includes the assigned Render hostname in both source and service configuration. Its merged environment update triggered the verified second deploy; no separate duplicate deploy was requested.
+- Namecheap A `@` → `216.24.57.1` and CNAME `www` → `loodle-n26t.onrender.com` are verified by authoritative and public DNS. **https://loodle.online is live** with valid TLS, homepage HTTP 200 and healthy `/healthz`. **https://www.loodle.online** has valid TLS and returns HTTP 301 to the apex. A two-client WSS smoke check through loodle.online passed room creation, synchronized server roll and disconnect/rejoin seat recovery. TLS checks used the verified target IP to avoid stale local DNS cache while preserving hostname/certificate validation. Live Google consent and visual/touch browser QA remain unverified.
+
 ### Free-tier deployment selection (2026-11-16)
 
 - Source is pushed to private `https://github.com/anzumr/loodle`, branch `codex/loodle-hosting`. GitHub web CI (including Docker build) and legacy Core tests passed for the initial release commit.

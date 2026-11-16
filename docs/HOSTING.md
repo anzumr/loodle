@@ -1,6 +1,8 @@
 # Hosting loodle.online
 
-Status: deployment files and local hosting checks are prepared. **The domain has not been deployed or changed.** GitHub is authenticated as `anzumr`; no project remote or matching accessible repository was found. DNS checked on 2026-11-16: Namecheap nameservers (`dns1.registrar-servers.com`, `dns2.registrar-servers.com`), apex A record `162.255.119.8`.
+Status (2026-11-16): **Live at https://loodle.online** on Render's free tier. Private source: `https://github.com/anzumr/loodle`, branch `codex/loodle-hosting`. Render service: `srv-dbtj1mei0phs73dgdf60`, Blueprint: `exs-dbtiu9jl550s73ddm7c0`, workspace: `tea-dbi3hvtg1s2s73dsva1g`. Fallback URL: `https://loodle-n26t.onrender.com`. Auto-deploy and Blueprint auto-sync are off.
+
+Namecheap DNS is verified: apex A `216.24.57.1`, `www` CNAME `loodle-n26t.onrender.com`. Both hostnames have valid TLS; `www` redirects to the apex. Live HTTP health and two-client secure WebSocket creation/roll/state synchronization/seat recovery checks passed on the custom domain. Google sign-in is configured but actual Google consent and browser visual/touch checks remain outstanding. The setup steps below are retained as a runbook, not pending creation instructions.
 
 ## Architecture
 
@@ -58,6 +60,6 @@ npm run smoke:reconnect -w @loodl/server
 
 `smoke:hosting` starts and stops its own server on port 8792. It checks HTTP/assets, origin protection and account-seat recovery with locally signed test sessions; it does **not** claim a real Google login. Normal `npm start` serves the built website at `http://localhost:8787`; Vite dev mode proxies `/api` and `/ws` to that server.
 
-Docker Desktop's Linux engine was not running during preparation; the container itself has not been built locally. The GitHub workflow includes a Docker build after tests/typecheck/build. Production TLS, actual Google login and browser layout remain unverified until hosting is connected.
+Docker Desktop's Linux engine was not running during preparation; the container was instead successfully built by GitHub CI and Render. Production TLS is verified. Actual Google login and browser layout remain unverified.
 
 References: [Render web services](https://render.com/docs/web-services), [Render blueprint fields](https://render.com/docs/blueprint-spec), [Namecheap DNS for Render](https://render.com/docs/configure-namecheap-dns), [Google ID-token verification](https://developers.google.com/identity/gsi/web/guides/verify-google-id-token), [GitHub Pages](https://docs.github.com/en/pages/getting-started-with-github-pages/what-is-github-pages).
