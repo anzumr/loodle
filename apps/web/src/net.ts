@@ -5,7 +5,7 @@ export interface RoomView {
   code: string;
   variant: string;
   host: number;
-  players: { name: string; seat: Seat | null; connected: boolean; bot: boolean }[];
+  players: { name: string; avatar: number; seat: Seat | null; connected: boolean; bot: boolean }[];
   match: MatchState | null;
   actionDeadline: number | null;
   public: boolean;
@@ -52,7 +52,8 @@ export interface Connection {
 }
 
 export type ConnectionStatus = 'connecting' | 'reconnecting' | 'connected' | 'failed';
-export type Entry = { t: 'create' | 'quick'; variant: string; token: string; name: string } | { t: 'join'; code: string; token: string; name: string };
+type Identity = { token: string; name: string; avatar?: number };
+export type Entry = ({ t: 'create' | 'quick'; variant: string } | { t: 'join'; code: string }) & Identity;
 
 /** Rejoin with the same identity, never replaying a roll or move after a drop. */
 export function connect(first: Entry, onMessage: (m: ServerMessage) => void, onStatus: (status: ConnectionStatus) => void, url = serverUrl()): Connection {
@@ -97,7 +98,7 @@ export function connect(first: Entry, onMessage: (m: ServerMessage) => void, onS
       let message: ServerMessage;
       try { message = JSON.parse(String(event.data)) as ServerMessage; } catch { return; }
       if (message.t === 'room') {
-        entry = { t: 'join', code: message.room.code, token: first.token, name: first.name };
+        entry = { t: 'join', code: message.room.code, token: first.token, name: first.name, avatar: first.avatar };
         rememberRoom(message.room.code);
         ready = true;
         attempts = 0;

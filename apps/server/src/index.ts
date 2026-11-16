@@ -75,7 +75,7 @@ function handle(socket: WebSocket, msg: Record<string, unknown>, request: Incomi
       room = rooms.get(String(msg.code ?? '').toUpperCase().trim());
       if (!room) throw new RoomError('No room with that code');
     }
-    room!.join(token, msg.name);
+    room!.join(token, msg.name, msg.avatar);
     room = room!;
     sockets.set(socket, { room, token });
     return broadcast(room);

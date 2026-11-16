@@ -4,6 +4,17 @@ Written 2026-11-16 for the next developer or coding agent. The product spec is t
 
 ## Where things stand
 
+### Continuation: Stage 6 profile basics — usernames and pictures (2026-11-16, uncommitted, NOT deployed)
+
+- `packages/rules/src/username.ts`: shared display-name rules. 3–16 letters, numbers or underscores; reserved staff/system names; a short starter profanity list with digit-swap and repeated-letter handling. `validateUsername` gives a reason for the UI; `cleanUsername` falls back to "Guest"; `cleanAvatar` validates picture ids (0–7). The server's `cleanName` now delegates to it, so the filter is enforced server-side for every room.
+- Profile sheet (tap the profile chip): name with live validation, eight built-in pictures (`apps/web/src/ui/Avatar.tsx`), then the existing Google sign-in panel. Stored locally as `loodl.name` and `loodl.avatar`. The Friends sheet warns when an unacceptable name will appear as Guest.
+- Online: clients send `avatar` with create/join/quick; `RoomView.players[].avatar` is shown in the waiting room. Bots get their own pictures.
+- Validation: **129 tests pass** (8 new username/avatar tests), typecheck and build pass. In a local browser at phone size the profile sheet showed the right message for short, reserved and blocked names, saved "Alex_12" with a picture, and updated the lobby chip. **Not verified:** pictures in an online waiting room were not viewed in a browser (the local game server was off for this check).
+- **Not built, and each needs a database the project does not have yet:** unique friend codes, controlled rename limits, profiles that follow a Google account across devices, frames/banners/titles, privacy settings, account deletion and recovery. Choosing and paying for a database (Render's free Postgres expires after a limited period) is an owner decision.
+- The blocklist is a deliberately short starter and will reject some innocent names containing a blocked string. Replace it with a maintained list or moderation service before chat or public profiles.
+- Pictures are placeholder pawn icons in eight colours, not the illustrated avatar collection or 3D pawn portraits from the spec.
+- The earlier Quick Play commit `9d43dec` is pushed but, like this work, is only live after a manual deploy in Render.
+
 ### Continuation: Quick Play matchmaking, bots and rematch (2026-11-16, uncommitted, NOT deployed)
 
 - **Quick Play** (Stage 5 casual matchmaking): new client message `quick {token,name,variant}`. The server puts the player in an open public room for that mode or opens one. Public rooms start by themselves: at once with four players, after an 8-second countdown from the second player. `Room.isPublic`, `joinable`, `lobbyTick()`; `RoomView.public` and `startsAt`.

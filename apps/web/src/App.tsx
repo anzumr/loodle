@@ -23,6 +23,8 @@ import { Die } from './ui/Die';
 import { Tutorial } from './ui/Tutorial';
 import { AccountPanel, type Account } from './ui/AccountPanel';
 import { play, setSoundEnabled, type Sfx } from './sound';
+import { AVATAR_COUNT, cleanAvatar, validateUsername } from '@loodl/rules';
+import { AVATAR_NAMES, Avatar } from './ui/Avatar';
 import { connect, playerToken, rememberedRoom, rememberRoom, type Connection, type ConnectionStatus, type RoomView, type ServerMessage } from './net';
 import { Back, Chest, Chevron, Crown, Gear, Pawn, People } from './ui/icons';
 
@@ -154,6 +156,31 @@ export function App() {
       return '';
     }
   });
+  const [avatar, setAvatar] = useState(() => {
+    try {
+      return cleanAvatar(Number(localStorage.getItem('loodl.avatar') ?? 0));
+    } catch {
+      return 0;
+    }
+  });
+  const nameCheck = validateUsername(name);
+  const chooseAvatar = (id: number) => {
+    setAvatar(id);
+    try {
+      localStorage.setItem('loodl.avatar', String(id));
+    } catch {
+      /* ignore */
+    }
+  };
+  const rename = (value: string) => {
+    const next = value.replace(/[^A-Za-z0-9_]/g, '');
+    setName(next);
+    try {
+      localStorage.setItem('loodl.name', next);
+    } catch {
+      /* ignore */
+    }
+  };
   const [code, setCode] = useState('');
   const conn = useRef<Connection | null>(null);
 
@@ -200,7 +227,7 @@ export function App() {
     }
     conn.current?.close();
     conn.current = connect(
-      { ...first, token: playerToken(), name },
+      { ...first, token: playerToken(), name, avatar },
       (m: ServerMessage) => {
         if (m.t === 'error') return setNetError(m.message);
         setOnline({ room: m.room, you: m.you });
@@ -389,13 +416,11 @@ export function App() {
       {screen === 'lobby' && (
         <div className="ui lobby">
           <header className="topbar">
-            <button className="profile profile-button" disabled={networkSession} onClick={() => setSheet('account')} aria-label="Account and sign-in">
-              <span className="avatar">
-                <Pawn />
-              </span>
+            <button className="profile profile-button" disabled={networkSession} onClick={() => setSheet('account')} aria-label="Profile and sign-in">
+              <Avatar id={avatar} />
               <span className="profile-text">
-                <strong>{account?.name ?? 'Guest'}</strong>
-                <small>{account ? 'Google account' : 'Play as guest or sign in'}</small>
+                <strong>{nameCheck.ok ? nameCheck.name : (account?.name ?? 'Guest')}</strong>
+                <small>{account ? 'Google account' : 'Guest · tap to edit profile'}</small>
               </span>
             </button>
             <button className="round-btn" aria-label="Settings" onClick={() => setSheet('settings')}>
@@ -639,9 +664,9 @@ export function App() {
               <label className="setting">
                 <span>
                   <strong>Your name</strong>
-                  <small>3–16 letters, numbers or _</small>
+                  <small className={name && !nameCheck.ok ? 'bad' : ''}>{name && !nameCheck.ok ? `${nameCheck.reason} — you will appear as Guest` : '3–16 letters, numbers or _'}</small>
                 </span>
-                <input value={name} maxLength={16} placeholder="Guest" onChange={(e) => setName(e.target.value.replace(/[^A-Za-z0-9_]/g, ''))} />
+                <input value={name} maxLength={16} placeholder="Guest" aria-invalid={!!name && !nameCheck.ok} onChange={(e) => rename(e.target.value)} />
               </label>
               <button className="mode on" onClick={() => enterRoom({ t: 'create', variant })}>
                 <span>
@@ -682,7 +707,8 @@ export function App() {
               )}
               {online.room.players.map((pl, i) => (
                 <div className="setting" key={i}>
-                  <strong>
+                  <strong className="who">
+                    <Avatar id={pl.avatar} size={34} />
                     {pl.name}
                     {i === online.you ? ' (you)' : ''}
                   </strong>
@@ -719,7 +745,29 @@ export function App() {
         </Sheet>
       )}
 
-      {sheet === 'account' && <Sheet title="Your account" onClose={() => setSheet(null)}><AccountPanel onChange={setAccount} /></Sheet>}
+      {sheet === 'account' && <Sheet title="Your profile" onClose={() => setSheet(null)}>
+          <label className="setting">
+            <span>
+              <strong>Name</strong>
+              <small className={name && !nameCheck.ok ? 'bad' : ''}>{name && !nameCheck.ok ? nameCheck.reason : '3–16 letters, numbers or _'}</small>
+            </span>
+            <input value={name} maxLength={16} placeholder="Guest" aria-invalid={!!name && !nameCheck.ok} onChange={(e) => rename(e.target.value)} />
+          </label>
+          <div className="setting stacked">
+            <span>
+              <strong>Picture</strong>
+            </span>
+            <div className="avatar-grid" role="radiogroup" aria-label="Profile picture">
+              {Array.from({ length: AVATAR_COUNT }, (_, id) => (
+                <button key={id} role="radio" aria-checked={avatar === id} aria-label={`${AVATAR_NAMES[id]} pawn`} className={avatar === id ? 'on' : ''} onClick={() => chooseAvatar(id)}>
+                  <Avatar id={id} size={46} />
+                </button>
+              ))}
+            </div>
+          </div>
+          <p className="hint">Other players only ever see your name and picture. Names are not unique.</p>
+          <AccountPanel onChange={setAccount} />
+        </Sheet>}
 
       {sheet === 'settings' && (
         <Sheet title="Settings" onClose={() => setSheet(null)}>

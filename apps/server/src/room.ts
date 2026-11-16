@@ -9,6 +9,8 @@ import {
   QUICK_CLASH_RULES,
   QUICK_RACE_RULES,
   applyAction,
+  cleanAvatar,
+  cleanUsername,
   chooseMove,
   createMatch,
   defaultSeats,
@@ -36,6 +38,8 @@ interface Player {
   /** Secret chosen by the client; proves who they are when they reconnect. Never sent to others. */
   token: string;
   name: string;
+  /** Which built-in profile picture they chose. */
+  avatar: number;
   seat: Seat | null;
   connected: boolean;
   /** A computer player added by Quick Play. Always shown as a bot, never as a person. */
@@ -48,7 +52,7 @@ export interface RoomView {
   variant: Variant;
   /** Index into `players` of the host. */
   host: number;
-  players: { name: string; seat: Seat | null; connected: boolean; bot: boolean }[];
+  players: { name: string; avatar: number; seat: Seat | null; connected: boolean; bot: boolean }[];
   match: MatchState | null;
   actionDeadline: number | null;
   /** True for Quick Play rooms: anyone can be matched in and the match starts by itself. */
@@ -57,9 +61,8 @@ export interface RoomView {
   startsAt: number | null;
 }
 
-/** 3–16 letters, numbers or underscores; anything else becomes "Guest". */
-export const cleanName = (name: unknown): string =>
-  typeof name === 'string' && /^[A-Za-z0-9_]{3,16}$/.test(name) ? name : 'Guest';
+/** The shared username rules: 3–16 letters, numbers or underscores, filtered; anything else becomes "Guest". */
+export const cleanName = (name: unknown): string => cleanUsername(name);
 
 export class Room {
   private players: Player[] = [];
@@ -89,7 +92,7 @@ export class Room {
   }
 
   /** Join, or rejoin after a dropped connection (same token keeps the same seat). */
-  join(token: string, name: unknown) {
+  join(token: string, name: unknown, avatar?: unknown) {
     this.touched = Date.now();
     const existing = this.players.find((p) => p.token === token);
     if (existing) {
@@ -98,7 +101,7 @@ export class Room {
     }
     if (this.match) throw new RoomError('That match has already started');
     if (this.players.length >= MAX_PLAYERS) throw new RoomError('That room is full');
-    this.players.push({ token, name: cleanName(name), seat: null, connected: true, bot: false });
+    this.players.push({ token, name: cleanName(name), avatar: cleanAvatar(avatar), seat: null, connected: true, bot: false });
     this.scheduleStart();
   }
 
@@ -123,7 +126,7 @@ export class Room {
     if (!this.isPublic || this.match || this.empty) return false;
     if (this.players.length < 2 && now >= Math.max(this.created, this.touched) + BOT_FILL_MS) {
       while (this.players.length < MAX_PLAYERS)
-        this.players.push({ token: `bot:${this.players.length}`, name: BOT_NAMES[this.players.length - 1]!, seat: null, connected: true, bot: true });
+        this.players.push({ token: `bot:${this.players.length}`, name: BOT_NAMES[this.players.length - 1]!, avatar: 3 + this.players.length, seat: null, connected: true, bot: true });
       this.startsAt = now;
     }
     if (this.startsAt === null || now < this.startsAt) return false;
@@ -221,7 +224,7 @@ export class Room {
       code: this.code,
       variant: this.variant,
       host: 0,
-      players: this.players.map(({ name, seat, connected, bot }) => ({ name, seat, connected, bot })),
+      players: this.players.map(({ name, avatar, seat, connected, bot }) => ({ name, avatar, seat, connected, bot })),
       match: this.match,
       actionDeadline: this.actionDeadline,
       public: this.isPublic,
