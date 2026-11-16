@@ -2,7 +2,7 @@
 
 A web-first 3D multiplayer Ludo game. Roll. Rival. Repeat.
 
-Current state: **classic pass-and-play works.** Two to four players can share one device and play a full classic match on the 3D board. There is no AI, online play, accounts, sound or saved matches yet.
+Current state: **offline play works.** Classic, Quick Race and Quick Clash for two to four players, either pass-and-play on one device or solo against five levels of computer rival, with sound and matches that survive a reload. There is no online play or accounts yet. See `HANDOFF.md` for detailed status.
 
 ## Run it
 

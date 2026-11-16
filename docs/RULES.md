@@ -40,6 +40,15 @@ These are implemented as fixed behaviour today. Each is a single small change if
 - `serializeMatch` / `deserializeMatch` save and restore mid-match, validating the data on load.
 - `seededDice` is for tests and simulations only.
 
+## Quick modes (proposed definitions, awaiting approval)
+
+Both use the classic board and all classic rules, and start each player with one pawn already on its start square.
+
+- **Quick Race** (`QUICK_RACE_RULES`): the first player to bring two pawns home wins and the match ends at once. Everyone else is ranked by pawns home, then by total distance travelled.
+- **Quick Clash** (`QUICK_CLASH_RULES`): 3 points per capture, 2 per pawn home. The first player to 10 points wins. If someone brings two pawns home before that, the match ends there and the highest score wins. Ties fall back to pawns home, then distance.
+
+Measured with medium AI on all four seats over 20 matches each, both quick modes take under 60% of the actions of a classic match (asserted in `quick.test.ts`).
+
 ## Not built yet
 
-Teams, Quick modes, turn timers, 5–8 player layouts, AI, and seat-balance statistics.
+Teams, shorter quick layouts, turn timers, 5–8 player layouts, tutorial, practice, campaign, and seat-balance statistics.

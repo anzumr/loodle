@@ -28,6 +28,16 @@ export interface RulesConfig {
   stackBonuses: boolean;
   /** Two friendly pawns on a shared square block opponents from landing or passing. */
   blockades: boolean;
+  /** Pawns that begin on the start square instead of in the yard (Quick modes). */
+  startOnBoard: number;
+  /** Pawns a seat must bring home to finish. null means all of them. */
+  pawnsToWin: number | null;
+  /** End the match as soon as one seat finishes, ranking the rest by standing. */
+  endOnFirstFinish: boolean;
+  /** Quick Clash: the match ends when a seat reaches this score. null turns scoring wins off. */
+  targetScore: number | null;
+  capturePoints: number;
+  homePoints: number;
 }
 
 export const CLASSIC_RULES: RulesConfig = {
@@ -37,6 +47,30 @@ export const CLASSIC_RULES: RulesConfig = {
   bonusOnFinish: false,
   stackBonuses: false,
   blockades: true,
+  startOnBoard: 0,
+  pawnsToWin: null,
+  endOnFirstFinish: false,
+  targetScore: null,
+  capturePoints: 0,
+  homePoints: 0,
+};
+
+/** Quick Race: one pawn already out; the first seat to bring two pawns home wins. */
+export const QUICK_RACE_RULES: RulesConfig = { ...CLASSIC_RULES, startOnBoard: 1, pawnsToWin: 2, endOnFirstFinish: true };
+
+/**
+ * Quick Clash: one pawn already out; 3 points per capture, 2 per pawn home.
+ * First to 10 points wins. If someone brings two pawns home first, the match
+ * ends there and the highest score wins.
+ */
+export const QUICK_CLASH_RULES: RulesConfig = {
+  ...CLASSIC_RULES,
+  startOnBoard: 1,
+  pawnsToWin: 2,
+  endOnFirstFinish: true,
+  targetScore: 10,
+  capturePoints: 3,
+  homePoints: 2,
 };
 
 export type Phase = 'roll' | 'move' | 'over';
@@ -59,8 +93,10 @@ export interface MatchState {
   /** pawns[seat][pawn] = progress. Seats not playing have an empty list. */
   pawns: number[][];
   turn: TurnState;
-  /** Seats in the order they brought every pawn home. */
+  /** Final placing, best first. Filled as seats finish, completed when the match ends. */
   finishOrder: Seat[];
+  /** Points per seat (index = seat). Only Quick Clash awards any. */
+  scores: number[];
   /** Number of actions applied so far. */
   version: number;
 }
@@ -87,6 +123,7 @@ export type GameEvent =
   | { type: 'moved'; seat: Seat; pawn: number; from: number; to: number }
   | { type: 'captured'; seat: Seat; pawn: number; by: Seat }
   | { type: 'pawnFinished'; seat: Seat; pawn: number }
+  | { type: 'scored'; seat: Seat; points: number; total: number }
   | { type: 'seatFinished'; seat: Seat; place: number }
   | { type: 'bonusRoll'; seat: Seat; reason: 'six' | 'capture' | 'finish' }
   | { type: 'turnPassed'; seat: Seat }
@@ -113,12 +150,20 @@ export function createMatch(options: { players?: number; seats?: Seat[]; config?
   if (seats.length < 2 || seats.length > 4 || new Set(seats).size !== seats.length || seats.some((s) => !SEATS.includes(s)))
     throw new RuleError('Seats must be 2 to 4 distinct classic seats');
   if (![2, 3, 4].includes(config.pawnsPerPlayer)) throw new RuleError('Pawns per player must be 2, 3 or 4');
+  const whole = (n: number, min: number, max: number) => Number.isInteger(n) && n >= min && n <= max;
+  if (!whole(config.startOnBoard, 0, config.pawnsPerPlayer)) throw new RuleError('Invalid number of pawns starting on the board');
+  if (config.pawnsToWin !== null && !whole(config.pawnsToWin, 1, config.pawnsPerPlayer)) throw new RuleError('Invalid pawns needed to win');
+  if (config.targetScore !== null && !whole(config.targetScore, 1, 1000)) throw new RuleError('Invalid target score');
+  if (!whole(config.capturePoints, 0, 100) || !whole(config.homePoints, 0, 100)) throw new RuleError('Invalid points');
   return {
     config,
     seats,
-    pawns: SEATS.map((s) => (seats.includes(s) ? Array<number>(config.pawnsPerPlayer).fill(YARD) : [])),
+    pawns: SEATS.map((s) =>
+      seats.includes(s) ? Array.from({ length: config.pawnsPerPlayer }, (_, i) => (i < config.startOnBoard ? 0 : YARD)) : [],
+    ),
     turn: { seat: seats[0]!, phase: 'roll', die: null, sixes: 0, pendingBonus: 0 },
     finishOrder: [],
+    scores: SEATS.map(() => 0),
     version: 0,
   };
 }
@@ -166,6 +211,7 @@ const clone = (s: MatchState): MatchState => ({
   pawns: s.pawns.map((p) => [...p]),
   turn: { ...s.turn },
   finishOrder: [...s.finishOrder],
+  scores: [...s.scores],
   version: s.version,
 });
 
@@ -224,14 +270,40 @@ function applyMove(state: MatchState, pawn: number, events: GameEvent[]) {
   }
   if (move.finishes) events.push({ type: 'pawnFinished', seat, pawn });
 
-  if (state.pawns[seat]!.every((step) => step === FINISH_STEP)) {
+  const { capturePoints, homePoints, targetScore, endOnFirstFinish } = state.config;
+  const points = move.captures.length * capturePoints + (move.finishes ? homePoints : 0);
+  if (points > 0) {
+    state.scores[seat]! += points;
+    events.push({ type: 'scored', seat, points, total: state.scores[seat]! });
+  }
+
+  const homeCount = (s: Seat) => state.pawns[s]!.filter((step) => step === FINISH_STEP).length;
+  const seatDone = homeCount(seat) >= (state.config.pawnsToWin ?? state.pawns[seat]!.length);
+  const scoreWin = targetScore !== null && state.scores[seat]! >= targetScore;
+  const endMatch = () => {
+    state.turn = { seat, phase: 'over', die: null, sixes: 0, pendingBonus: 0 };
+    events.push({ type: 'matchOver', order: [...state.finishOrder] });
+  };
+
+  if (scoreWin || (seatDone && endOnFirstFinish)) {
+    // Quick modes: rank everyone now. Clash ranks by score; Race puts the finisher first.
+    const progress = (s: Seat) => state.pawns[s]!.reduce((sum, step) => sum + step, 0);
+    const lead = (s: Seat) => (targetScore !== null ? state.scores[s]! : s === seat ? 1 : 0);
+    state.finishOrder = [...state.seats].sort(
+      (a, b) => lead(b) - lead(a) || homeCount(b) - homeCount(a) || progress(b) - progress(a),
+    );
+    events.push({ type: 'seatFinished', seat: state.finishOrder[0]!, place: 1 });
+    endMatch();
+    return;
+  }
+
+  if (seatDone) {
     state.finishOrder.push(seat);
     events.push({ type: 'seatFinished', seat, place: state.finishOrder.length });
     const remaining = state.seats.filter((s) => !state.finishOrder.includes(s));
     if (remaining.length <= 1) {
       state.finishOrder.push(...remaining);
-      state.turn = { seat, phase: 'over', die: null, sixes: 0, pendingBonus: 0 };
-      events.push({ type: 'matchOver', order: [...state.finishOrder] });
+      endMatch();
     } else passTurn(state, events); // a finished seat has nothing left to roll for
     return;
   }
@@ -312,6 +384,7 @@ export function deserializeMatch(json: string): MatchState {
   if (!Number.isInteger(t.sixes) || t.sixes < 0 || t.sixes >= SIX_LIMIT) fail('six streak');
   if (!Number.isInteger(t.pendingBonus) || t.pendingBonus < 0) fail('bonus');
   if (!Array.isArray(s.finishOrder) || s.finishOrder.some((x) => !s.seats.includes(x))) fail('finish order');
+  if (!Array.isArray(s.scores) || s.scores.length !== SEATS.length || s.scores.some((n) => !Number.isInteger(n) || n < 0)) fail('scores');
   if (!Number.isInteger(s.version) || s.version < 0) fail('version');
   return clone(s);
 }

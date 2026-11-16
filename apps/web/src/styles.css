@@ -804,3 +804,23 @@ button:focus-visible {
 .tile:not(:disabled):active {
   transform: translateY(2px);
 }
+
+.seat b {
+  margin-left: 3px;
+  font-size: 12px;
+  line-height: 9px;
+  color: var(--seat);
+}
+.howto {
+  margin: 0;
+  padding: 0 4px 0 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 16px;
+  line-height: 1.4;
+}
+.howto li::marker {
+  color: var(--gold-300);
+  font-weight: 800;
+}

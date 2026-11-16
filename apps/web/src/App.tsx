@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AI_LEVELS,
+  CLASSIC_RULES,
   FINISH_STEP,
+  QUICK_CLASH_RULES,
+  QUICK_RACE_RULES,
   SEAT_NAMES,
   applyAction,
   chooseMove,
@@ -33,6 +36,23 @@ const loadQuality = (): Quality => {
 };
 
 const SAVE_KEY = 'loodl.match';
+
+const VARIANTS = {
+  classic: { label: 'Classic', rules: CLASSIC_RULES, blurb: 'Full game: bring all four pawns home' },
+  race: { label: 'Race', rules: QUICK_RACE_RULES, blurb: 'Quick: one pawn starts out, first to bring two home wins' },
+  clash: { label: 'Clash', rules: QUICK_CLASH_RULES, blurb: 'Quick: 3 points per capture, 2 per pawn home, first to 10' },
+} as const;
+type Variant = keyof typeof VARIANTS;
+
+const HOW_TO_PLAY = [
+  'Roll the die on your turn. You need a six to bring a pawn out of your yard.',
+  'Tap a glowing pawn to move it forward by the number you rolled.',
+  'Land on an opponent to send that pawn back to its yard. You roll again.',
+  'Pawns on a star or on any coloured start square are safe.',
+  'Two of your pawns on one square form a block that opponents cannot pass.',
+  'A six gives you another roll, but a third six in a row ends your turn with no move.',
+  'Travel once around the board, up your coloured lane, and land on the centre with the exact number.',
+];
 const SOUND_KEY = 'loodl.sound';
 
 /** Named computer rivals, one per difficulty. */
@@ -97,7 +117,8 @@ export function App() {
   const scene = useRef<BoardScene | null>(null);
   const [screen, setScreen] = useState<Screen>('lobby');
   const [view, setView] = useState<View>('angled');
-  const [sheet, setSheet] = useState<'play' | 'settings' | null>(null);
+  const [sheet, setSheet] = useState<'play' | 'settings' | 'help' | null>(null);
+  const [variant, setVariant] = useState<Variant>('classic');
   const [quality, setQuality] = useState<Quality>(loadQuality);
   const saved = useMemo(loadSaved, []);
   const [players, setPlayers] = useState(4);
@@ -220,7 +241,7 @@ export function App() {
   }, [quality]);
 
   const startMatch = () => {
-    const fresh = createMatch({ players });
+    const fresh = createMatch({ players, config: VARIANTS[variant].rules });
     setHumans(solo ? [fresh.seats[0]!] : fresh.seats);
     setMatch(fresh);
     setMessage('');
@@ -230,6 +251,7 @@ export function App() {
 
   const turn = match?.turn;
   const over = turn?.phase === 'over';
+  const clash = !!match && match.config.targetScore !== null;
   const vsAi = !!match && humans.length < match.seats.length;
   const who = (seat: Seat) => (!vsAi ? seatName(seat) : humans.includes(seat) ? 'You' : RIVALS[level]);
 
@@ -303,11 +325,12 @@ export function App() {
                 <span
                   key={seat}
                   className={`seat seat-${SEAT_NAMES[seat]} ${!over && turn.seat === seat ? 'active' : ''}`}
-                  aria-label={`${seatName(seat)}: ${home} of ${match.pawns[seat]!.length} home`}
+                  aria-label={`${seatName(seat)}: ${home} of ${match.pawns[seat]!.length} home${clash ? `, ${match.scores[seat]} points` : ''}`}
                 >
                   {match.pawns[seat]!.map((_, i) => (
                     <i key={i} className={i < home ? 'home' : ''} />
                   ))}
+                  {clash && <b>{match.scores[seat]}</b>}
                 </span>
               );
             })}
@@ -343,7 +366,10 @@ export function App() {
                   <i />
                   <strong>{vsAi ? `${seatName(seat)} · ${who(seat)}` : seatName(seat)}</strong>
                 </span>
-                <strong>{['1st', '2nd', '3rd', '4th'][i]}</strong>
+                <strong>
+                  {clash ? `${match.scores[seat]} pts · ` : ''}
+                  {['1st', '2nd', '3rd', '4th'][i]}
+                </strong>
               </div>
             ))}
             <button className="mode on" onClick={startMatch}>
@@ -372,9 +398,22 @@ export function App() {
               <Chevron />
             </button>
           )}
+          <div className="setting stacked">
+            <span>
+              <strong>{variant === 'classic' ? 'Classic Ludo' : `Quick ${VARIANTS[variant].label}`}</strong>
+              <small>{VARIANTS[variant].blurb}</small>
+            </span>
+            <div className="segmented compact" role="group" aria-label="Game mode">
+              {(Object.keys(VARIANTS) as Variant[]).map((v) => (
+                <button key={v} className={variant === v ? 'on' : ''} aria-pressed={variant === v} onClick={() => setVariant(v)}>
+                  {VARIANTS[v].label}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="setting">
             <span>
-              <strong>Classic</strong>
+              <strong>Opponents</strong>
               <small>{solo ? 'You against the computer' : 'Share this device'}</small>
             </span>
             <div className="segmented" role="group" aria-label="Opponents">
@@ -416,8 +455,15 @@ export function App() {
             <span>
               <strong>Start new match</strong>
               <small>
-                {players} players · 4 pawns each{solo ? ` · ${level}` : ''}
+                {VARIANTS[variant].label} · {players} players{solo ? ` · ${level}` : ''}
               </small>
+            </span>
+            <Chevron />
+          </button>
+          <button className="mode" onClick={() => setSheet('help')}>
+            <span>
+              <strong>How to play</strong>
+              <small>The rules in one minute</small>
             </span>
             <Chevron />
           </button>
@@ -434,6 +480,16 @@ export function App() {
               <em>Soon</em>
             </button>
           ))}
+        </Sheet>
+      )}
+
+      {sheet === 'help' && (
+        <Sheet title="How to play" onClose={() => setSheet('play')}>
+          <ol className="howto">
+            {HOW_TO_PLAY.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ol>
         </Sheet>
       )}
 
