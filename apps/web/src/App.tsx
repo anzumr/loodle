@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AI_LEVELS,
   FINISH_STEP,
   SEAT_NAMES,
   applyAction,
+  chooseMove,
   createMatch,
+  deserializeMatch,
   legalMoves,
+  serializeMatch,
+  type AiLevel,
   type GameEvent,
   type MatchState,
   type Seat,
@@ -12,6 +17,7 @@ import {
 import { BoardScene, type CameraMode, type Quality } from './scene/BoardScene';
 import { Logo } from './ui/Logo';
 import { Die } from './ui/Die';
+import { play, setSoundEnabled, type Sfx } from './sound';
 import { Back, Chest, Chevron, Crown, Gear, Pawn, People } from './ui/icons';
 
 type Screen = 'lobby' | 'board';
@@ -24,6 +30,37 @@ const loadQuality = (): Quality => {
   } catch {
     return 'high';
   }
+};
+
+const SAVE_KEY = 'loodl.match';
+const SOUND_KEY = 'loodl.sound';
+
+/** Named computer rivals, one per difficulty. */
+const RIVALS: Record<AiLevel, string> = { beginner: 'Pip', easy: 'Dot', medium: 'Rook', hard: 'Vex', expert: 'Sable' };
+
+interface Saved {
+  match: MatchState;
+  humans: Seat[];
+  level: AiLevel;
+}
+
+function loadSaved(): Saved | null {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SAVE_KEY) ?? 'null') as { match: string; humans: Seat[]; level: AiLevel } | null;
+    if (!raw || !Array.isArray(raw.humans) || !AI_LEVELS.includes(raw.level)) return null;
+    const match = deserializeMatch(raw.match);
+    return match.turn.phase === 'over' ? null : { match, humans: raw.humans, level: raw.level };
+  } catch {
+    return null;
+  }
+}
+
+const SOUNDS: Partial<Record<GameEvent['type'], Sfx>> = {
+  matchOver: 'win',
+  captured: 'capture',
+  thirdSixForfeit: 'bust',
+  pawnFinished: 'home',
+  moved: 'move',
 };
 
 const seatName = (seat: Seat) => SEAT_NAMES[seat][0]!.toUpperCase() + SEAT_NAMES[seat].slice(1);
@@ -62,20 +99,34 @@ export function App() {
   const [view, setView] = useState<View>('angled');
   const [sheet, setSheet] = useState<'play' | 'settings' | null>(null);
   const [quality, setQuality] = useState<Quality>(loadQuality);
+  const saved = useMemo(loadSaved, []);
   const [players, setPlayers] = useState(4);
-  const [match, setMatch] = useState<MatchState | null>(null);
+  const [solo, setSolo] = useState(true);
+  const [level, setLevel] = useState<AiLevel>(saved?.level ?? 'medium');
+  const [humans, setHumans] = useState<Seat[]>(saved?.humans ?? [0]);
+  const [sound, setSound] = useState(() => {
+    try {
+      return localStorage.getItem(SOUND_KEY) !== 'off';
+    } catch {
+      return true;
+    }
+  });
+  const [match, setMatch] = useState<MatchState | null>(saved?.match ?? null);
   const [message, setMessage] = useState('');
   const [face, setFace] = useState(6);
   const [rolling, setRolling] = useState(false);
 
   const moves = useMemo(() => (match?.turn.phase === 'move' ? legalMoves(match) : []), [match]);
   // If every legal move starts from the same spot there is nothing to choose.
-  const forced = moves.length > 0 && moves.every((m) => m.from === moves[0]!.from);
+  const human = !!match && humans.includes(match.turn.seat);
+  const forced = human && moves.length > 0 && moves.every((m) => m.from === moves[0]!.from);
 
   const act = useCallback((state: MatchState, action: Parameters<typeof applyAction>[1]) => {
     const result = applyAction(state, action);
     setMatch(result.state);
     setMessage(describe(result.events));
+    const sfx = (Object.keys(SOUNDS) as GameEvent['type'][]).find((type) => result.events.some((e) => e.type === type));
+    if (sfx) play(SOUNDS[sfx]!);
   }, []);
 
   const move = useCallback(
@@ -89,6 +140,7 @@ export function App() {
     if (!match || match.turn.phase !== 'roll' || rolling) return;
     setRolling(true);
     setMessage('');
+    play('roll');
     const value = rollDie();
     window.setTimeout(() => {
       setFace(value);
@@ -117,15 +169,46 @@ export function App() {
   useEffect(() => {
     const showing = screen === 'board' && match;
     scene.current?.setView(
-      showing ? { pawns: match.pawns, seat: match.turn.seat, movable: forced ? [] : moves.map((m) => m.pawn) } : null,
+      showing ? { pawns: match.pawns, seat: match.turn.seat, movable: forced || !human ? [] : moves.map((m) => m.pawn) } : null,
     );
-  }, [screen, match, moves, forced]);
+  }, [screen, match, moves, forced, human]);
 
   useEffect(() => {
     if (!forced || screen !== 'board') return;
     const id = window.setTimeout(() => move(moves[0]!.pawn), 650);
     return () => window.clearTimeout(id);
   }, [forced, moves, move, screen]);
+
+  // Computer players: roll, then choose a move. They only pick among legal moves.
+  useEffect(() => {
+    if (!match || screen !== 'board' || match.turn.phase === 'over' || human || rolling) return;
+    const seat = match.turn.seat;
+    const id = window.setTimeout(
+      () => (match.turn.phase === 'roll' ? roll() : act(match, { type: 'move', seat, pawn: chooseMove(match, level, Math.random) })),
+      match.turn.phase === 'roll' ? 1000 : 700,
+    );
+    return () => window.clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [match, screen, human, rolling, level]);
+
+  // Keep the match across reloads.
+  useEffect(() => {
+    try {
+      if (match && match.turn.phase !== 'over') localStorage.setItem(SAVE_KEY, JSON.stringify({ match: serializeMatch(match), humans, level }));
+      else localStorage.removeItem(SAVE_KEY);
+    } catch {
+      /* storage unavailable: the match just won't survive a reload */
+    }
+  }, [match, humans, level]);
+
+  useEffect(() => {
+    setSoundEnabled(sound);
+    try {
+      localStorage.setItem(SOUND_KEY, sound ? 'on' : 'off');
+    } catch {
+      /* ignore */
+    }
+  }, [sound]);
 
   useEffect(() => {
     scene.current?.setQuality(quality);
@@ -137,7 +220,9 @@ export function App() {
   }, [quality]);
 
   const startMatch = () => {
-    setMatch(createMatch({ players }));
+    const fresh = createMatch({ players });
+    setHumans(solo ? [fresh.seats[0]!] : fresh.seats);
+    setMatch(fresh);
     setMessage('');
     setSheet(null);
     setScreen('board');
@@ -145,6 +230,8 @@ export function App() {
 
   const turn = match?.turn;
   const over = turn?.phase === 'over';
+  const vsAi = !!match && humans.length < match.seats.length;
+  const who = (seat: Seat) => (!vsAi ? seatName(seat) : humans.includes(seat) ? 'You' : RIVALS[level]);
 
   return (
     <div className={`app screen-${screen}`}>
@@ -177,7 +264,7 @@ export function App() {
               <Chevron className="play-chevron" />
             </button>
             <nav className="tiles" aria-label="More ways to play">
-              <Tile icon={<Pawn />} title="Solo" sub="Play Offline" tone="gold" />
+              <Tile icon={<Pawn />} title="Solo" sub="Play Offline" tone="gold" onClick={() => (setSolo(true), setSheet('play'))} />
               <Tile icon={<People />} title="Friends" sub="Play Together" tone="blue" />
               <Tile icon={<Chest />} title="Collection" sub="Boards & Pawns" tone="red" />
             </nav>
@@ -196,7 +283,7 @@ export function App() {
             ) : (
               <div className={`turn-pill seat-${SEAT_NAMES[turn.seat]}`} aria-live="polite">
                 <i />
-                {seatName(turn.seat)}’s turn
+                {vsAi && human ? 'Your turn' : `${seatName(turn.seat)}’s turn`}
               </div>
             )}
             <div className="segmented" role="group" aria-label="Camera view">
@@ -229,11 +316,12 @@ export function App() {
           {!over && (
             <footer className="board-foot">
               <div className="readout" aria-live="polite">
-                {(forced ? message.replace(' — tap a pawn', '') : message) || (turn.phase === 'roll' ? 'Roll the die' : 'Tap a pawn')}
+                {(forced || !human ? message.replace(' — tap a pawn', '') : message) ||
+                  (!human ? `${RIVALS[level]} is playing…` : turn.phase === 'roll' ? 'Roll the die' : 'Tap a pawn')}
               </div>
               <div className="roll-row">
                 <Die value={face} rolling={rolling} />
-                <button className="play-btn roll-btn" onClick={roll} disabled={turn.phase !== 'roll' || rolling}>
+                <button className="play-btn roll-btn" onClick={roll} disabled={!human || turn.phase !== 'roll' || rolling}>
                   ROLL
                 </button>
               </div>
@@ -246,14 +334,14 @@ export function App() {
         <div className="scrim">
           <div className="sheet" role="dialog" aria-modal="true" aria-label="Results">
             <div className="sheet-head">
-              <h2>{seatName(match.finishOrder[0]!)} wins!</h2>
+              <h2>{vsAi && humans.includes(match.finishOrder[0]!) ? 'You win!' : `${seatName(match.finishOrder[0]!)} wins!`}</h2>
               <Crown style={{ width: 44 }} />
             </div>
             {match.finishOrder.map((seat, i) => (
               <div className="setting" key={seat}>
                 <span className={`place seat-${SEAT_NAMES[seat]}`}>
                   <i />
-                  <strong>{seatName(seat)}</strong>
+                  <strong>{vsAi ? `${seatName(seat)} · ${who(seat)}` : seatName(seat)}</strong>
                 </span>
                 <strong>{['1st', '2nd', '3rd', '4th'][i]}</strong>
               </div>
@@ -286,8 +374,21 @@ export function App() {
           )}
           <div className="setting">
             <span>
-              <strong>Classic · Pass &amp; Play</strong>
-              <small>Share this device</small>
+              <strong>Classic</strong>
+              <small>{solo ? 'You against the computer' : 'Share this device'}</small>
+            </span>
+            <div className="segmented" role="group" aria-label="Opponents">
+              <button className={solo ? 'on' : ''} aria-pressed={solo} onClick={() => setSolo(true)}>
+                Solo
+              </button>
+              <button className={!solo ? 'on' : ''} aria-pressed={!solo} onClick={() => setSolo(false)}>
+                Pass &amp; Play
+              </button>
+            </div>
+          </div>
+          <div className="setting">
+            <span>
+              <strong>Players</strong>
             </span>
             <div className="segmented" role="group" aria-label="Number of players">
               {[2, 3, 4].map((n) => (
@@ -297,16 +398,31 @@ export function App() {
               ))}
             </div>
           </div>
+          {solo && (
+            <div className="setting stacked">
+              <span>
+                <strong>Rival: {RIVALS[level]}</strong>
+              </span>
+              <div className="segmented compact" role="group" aria-label="Difficulty">
+                {AI_LEVELS.map((l) => (
+                  <button key={l} className={level === l ? 'on' : ''} aria-pressed={level === l} onClick={() => setLevel(l)}>
+                    {l[0]!.toUpperCase() + l.slice(1)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <button className={`mode ${match && match.turn.phase !== 'over' ? '' : 'on'}`} onClick={startMatch}>
             <span>
               <strong>Start new match</strong>
-              <small>{players} players · 4 pawns each</small>
+              <small>
+                {players} players · 4 pawns each{solo ? ` · ${level}` : ''}
+              </small>
             </span>
             <Chevron />
           </button>
           {[
             ['Quick Play', 'Fast online match'],
-            ['Solo', 'Play against AI rivals'],
             ['Friends', 'Private room with an invite code'],
             ['Ranked', 'Linked accounts only'],
           ].map(([title, sub]) => (
@@ -336,16 +452,28 @@ export function App() {
               ))}
             </div>
           </div>
+          <div className="setting">
+            <span>
+              <strong>Sound</strong>
+            </span>
+            <div className="segmented">
+              {[true, false].map((on) => (
+                <button key={String(on)} className={sound === on ? 'on' : ''} aria-pressed={sound === on} onClick={() => setSound(on)}>
+                  {on ? 'On' : 'Off'}
+                </button>
+              ))}
+            </div>
+          </div>
         </Sheet>
       )}
     </div>
   );
 }
 
-function Tile({ icon, title, sub, tone }: { icon: React.ReactNode; title: string; sub: string; tone: string }) {
+function Tile({ icon, title, sub, tone, onClick }: { icon: React.ReactNode; title: string; sub: string; tone: string; onClick?: () => void }) {
   return (
-    <button className={`tile tone-${tone}`} disabled aria-label={`${title} — coming soon`}>
-      <em>Soon</em>
+    <button className={`tile tone-${tone}`} disabled={!onClick} onClick={onClick} aria-label={onClick ? title : `${title} — coming soon`}>
+      {!onClick && <em>Soon</em>}
       <span className="tile-icon">{icon}</span>
       <strong>{title}</strong>
       <small>{sub}</small>

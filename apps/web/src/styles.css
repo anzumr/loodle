@@ -789,3 +789,18 @@ button:focus-visible {
     padding: 9px;
   }
 }
+
+.setting.stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+.segmented.compact button {
+  flex: 1;
+  min-width: 0;
+  padding: 0 4px;
+  font-size: 12px;
+}
+.tile:not(:disabled):active {
+  transform: translateY(2px);
+}

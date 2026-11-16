@@ -39,10 +39,11 @@ const YARD_TOP = 0.34;
 const HALF = 7;
 
 interface PawnAnim {
-  from: THREE.Vector3;
-  to: THREE.Vector3;
+  /** Where the pawn starts, each square it hops through, and where it ends. */
+  points: THREE.Vector3[];
   s0: number;
   s1: number;
+  /** Progress in hops: 0 at the first point, points.length - 1 at the last. */
   t: number;
 }
 
@@ -307,7 +308,7 @@ export class BoardScene {
   /** Where each pawn should stand, spreading out pawns that share a square. */
   private layoutPawns(animate: boolean) {
     const sharing = new Map<string, number>();
-    const slots: { pawn: THREE.Group; pos: THREE.Vector3; scale: number; key?: string }[] = [];
+    const slots: { pawn: THREE.Group; pos: THREE.Vector3; scale: number; key?: string; step: number; path: readonly BoardNode[] }[] = [];
     for (const seat of SEATS) {
       const steps = this.view ? (this.view.pawns[seat] ?? []) : [-1, -1, -1, -1];
       const path = pathForSeat(seat);
@@ -316,16 +317,16 @@ export class BoardScene {
         pawn.visible = step !== undefined;
         if (step === undefined) return;
         if (step < 0) {
-          slots.push({ pawn, pos: toWorld(yardSpots(seat)[i]!, YARD_TOP + 0.125), scale: 1.25 });
+          slots.push({ pawn, pos: toWorld(yardSpots(seat)[i]!, YARD_TOP + 0.125), scale: 1.25, step, path });
         } else if (step >= path.length - 1) {
           // Home: line up inside the seat's own centre triangle.
           const lane = toWorld(LANES[seat]![4]!).normalize();
           const side = new THREE.Vector3(-lane.z, 0, lane.x).multiplyScalar((i - 1.5) * 0.36);
-          slots.push({ pawn, pos: lane.multiplyScalar(0.95).add(side).setY(0.29), scale: 0.72 });
+          slots.push({ pawn, pos: lane.multiplyScalar(0.95).add(side).setY(0.29), scale: 0.72, step, path });
         } else {
           const node = path[step]!;
           sharing.set(node.id, (sharing.get(node.id) ?? 0) + 1);
-          slots.push({ pawn, pos: toWorld(node, TILE_TOP), scale: 1.1, key: node.id });
+          slots.push({ pawn, pos: toWorld(node, TILE_TOP), scale: 1.1, key: node.id, step, path });
         }
       });
     }
@@ -340,15 +341,22 @@ export class BoardScene {
         slot.pos.z += Math.sin(a) * 0.24;
         slot.scale = 0.78;
       }
-      const { pawn, pos, scale } = slot;
+      const { pawn, pos, scale, step, path } = slot;
       const anim = pawn.userData.anim as PawnAnim | undefined;
-      const current = anim?.to ?? pawn.position;
+      const previous = pawn.userData.step as number | undefined;
+      pawn.userData.step = step;
+      const current = anim ? anim.points[anim.points.length - 1]! : pawn.position;
       if (!animate) {
         pawn.position.copy(pos);
         pawn.scale.setScalar(scale);
         pawn.userData.anim = undefined;
       } else if (current.distanceTo(pos) > 0.01 || Math.abs((anim?.s1 ?? pawn.scale.x) - scale) > 0.01) {
-        pawn.userData.anim = { from: pawn.position.clone(), to: pos, s0: pawn.scale.x, s1: scale, t: 0 } satisfies PawnAnim;
+        // Moving forward along the path: hop through every square on the way.
+        const through =
+          previous !== undefined && previous >= 0 && step > previous
+            ? path.slice(previous + 1, step).map((n) => toWorld(n, TILE_TOP))
+            : [];
+        pawn.userData.anim = { points: [pawn.position.clone(), ...through, pos], s0: pawn.scale.x, s1: scale, t: 0 } satisfies PawnAnim;
       }
     }
   }
@@ -536,12 +544,18 @@ export class BoardScene {
       for (const pawn of group) {
         const anim = pawn.userData.anim as PawnAnim | undefined;
         if (!anim) continue;
-        anim.t = Math.min(1, anim.t + dt / 0.38);
-        const k = anim.t * anim.t * (3 - 2 * anim.t);
-        pawn.position.lerpVectors(anim.from, anim.to, k);
-        pawn.position.y += Math.sin(Math.PI * k) * Math.min(1.2, 0.35 + anim.from.distanceTo(anim.to) * 0.12);
-        pawn.scale.setScalar(THREE.MathUtils.lerp(anim.s0, anim.s1, k));
-        if (anim.t >= 1) pawn.userData.anim = undefined;
+        const hops = anim.points.length - 1;
+        const walking = hops > 1;
+        anim.t = Math.min(hops, anim.t + dt / (walking ? 0.16 : 0.38));
+        const seg = Math.min(hops - 1, Math.floor(anim.t));
+        const from = anim.points[seg]!;
+        const to = anim.points[seg + 1]!;
+        const local = anim.t - seg;
+        const k = local * local * (3 - 2 * local);
+        pawn.position.lerpVectors(from, to, k);
+        pawn.position.y += Math.sin(Math.PI * k) * (walking ? 0.32 : Math.min(1.2, 0.35 + from.distanceTo(to) * 0.12));
+        pawn.scale.setScalar(THREE.MathUtils.lerp(anim.s0, anim.s1, anim.t / hops));
+        if (anim.t >= hops) pawn.userData.anim = undefined;
       }
 
     const movable = this.view && this.mode !== 'lobby' ? this.view.movable : [];
