@@ -5,9 +5,11 @@ export interface RoomView {
   code: string;
   variant: string;
   host: number;
-  players: { name: string; seat: Seat | null; connected: boolean }[];
+  players: { name: string; seat: Seat | null; connected: boolean; bot: boolean }[];
   match: MatchState | null;
   actionDeadline: number | null;
+  public: boolean;
+  startsAt: number | null;
 }
 
 export type ServerMessage = { t: 'room'; room: RoomView; you: number; events: GameEvent[] } | { t: 'error'; message: string };
@@ -50,7 +52,7 @@ export interface Connection {
 }
 
 export type ConnectionStatus = 'connecting' | 'reconnecting' | 'connected' | 'failed';
-export type Entry = { t: 'create'; variant: string; token: string; name: string } | { t: 'join'; code: string; token: string; name: string };
+export type Entry = { t: 'create' | 'quick'; variant: string; token: string; name: string } | { t: 'join'; code: string; token: string; name: string };
 
 /** Rejoin with the same identity, never replaying a roll or move after a drop. */
 export function connect(first: Entry, onMessage: (m: ServerMessage) => void, onStatus: (status: ConnectionStatus) => void, url = serverUrl()): Connection {

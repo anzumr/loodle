@@ -894,3 +894,8 @@ button:focus-visible {
 @media (max-height: 500px) and (orientation: landscape) {
   .tutorial-guide { align-self: flex-start; width: 240px; font-size: 13px; }
 }
+
+.room-code strong.finding {
+  font-size: 26px;
+  letter-spacing: 0.04em;
+}

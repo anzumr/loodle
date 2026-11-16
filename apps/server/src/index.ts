@@ -5,7 +5,8 @@
  * player in the room the full room view, which keeps clients simple and makes
  * reconnecting trivial: rejoin with the same token and you get the current state.
  *
- * Client → server:  create {token,name,variant} | join {token,name,code} | start | roll | move {pawn} | leave
+ * Client → server:  create {token,name,variant} | join {token,name,code} | quick {token,name,variant}
+ *                    | start | roll | move {pawn} | rematch | leave
  * Server → client:  room {room, you, events} | error {message}
  */
 import { randomInt } from 'node:crypto';
@@ -58,21 +59,24 @@ function handle(socket: WebSocket, msg: Record<string, unknown>, request: Incomi
   const session = sockets.get(socket);
   const account = auth.account(request);
   if (session?.token.startsWith('google:') && !account) throw new RoomError('Your sign-in has expired. Sign in again.');
-  if (msg.t === 'create' || msg.t === 'join') {
+  if (msg.t === 'create' || msg.t === 'join' || msg.t === 'quick') {
     if (session) throw new RoomError('Leave your current room first');
     if (typeof msg.token !== 'string' || msg.token.length < 16 || msg.token.length > 64) throw new RoomError('Invalid player token');
     const token = account ? `google:${account.id}` : `guest:${msg.token}`;
     let room: Room | undefined;
-    if (msg.t === 'create') {
+    const variant = (typeof msg.variant === 'string' && Object.hasOwn(VARIANTS, msg.variant) ? msg.variant : 'classic') as Variant;
+    // Quick Play: join an open public room for this mode if there is one, otherwise open a new one.
+    if (msg.t === 'quick') room = [...rooms.values()].find((r) => r.joinable && r.variant === variant && r.indexOf(token) < 0);
+    if (msg.t === 'create' || (msg.t === 'quick' && !room)) {
       if (rooms.size >= 500) throw new RoomError('Server is full. Please try again later.');
-      const variant = (typeof msg.variant === 'string' && Object.hasOwn(VARIANTS, msg.variant) ? msg.variant : 'classic') as Variant;
-      room = new Room(newCode(), variant, dice);
+      room = new Room(newCode(), variant, dice, msg.t === 'quick');
       rooms.set(room.code, room);
-    } else {
+    } else if (msg.t === 'join') {
       room = rooms.get(String(msg.code ?? '').toUpperCase().trim());
       if (!room) throw new RoomError('No room with that code');
     }
-    room.join(token, msg.name);
+    room!.join(token, msg.name);
+    room = room!;
     sockets.set(socket, { room, token });
     return broadcast(room);
   }
@@ -81,6 +85,7 @@ function handle(socket: WebSocket, msg: Record<string, unknown>, request: Incomi
   if (msg.t === 'start') return room.start(token), broadcast(room);
   if (msg.t === 'roll') return broadcast(room, room.roll(token));
   if (msg.t === 'move') return broadcast(room, room.move(token, msg.pawn));
+  if (msg.t === 'rematch') return room.rematch(token), broadcast(room);
   if (msg.t === 'leave') return leave(socket);
   throw new RoomError('Unknown message');
 }
@@ -134,6 +139,7 @@ heartbeat.unref();
 
 const turns = setInterval(() => {
   for (const room of rooms.values()) {
+    if (room.lobbyTick()) broadcast(room);
     const events = room.tick();
     if (events.length) broadcast(room, events);
   }

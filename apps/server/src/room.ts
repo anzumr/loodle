@@ -22,6 +22,13 @@ export const VARIANTS = { classic: CLASSIC_RULES, race: QUICK_RACE_RULES, clash:
 export type Variant = keyof typeof VARIANTS;
 export const MAX_PLAYERS = 4;
 export const ACTION_TIMEOUT_MS = 30_000;
+/** Quick Play: countdown once two players are in, so others can still join. */
+export const PUBLIC_START_DELAY_MS = 8_000;
+/** Quick Play: how long to look for people before computer players fill the empty seats. */
+export const BOT_FILL_MS = 15_000;
+/** Pause before a computer player acts, so its turn can be followed. */
+export const BOT_DELAY_MS = 1_200;
+const BOT_NAMES = ['Pip', 'Dot', 'Rook', 'Vex'];
 
 export class RoomError extends Error {}
 
@@ -31,6 +38,8 @@ interface Player {
   name: string;
   seat: Seat | null;
   connected: boolean;
+  /** A computer player added by Quick Play. Always shown as a bot, never as a person. */
+  bot: boolean;
 }
 
 /** What every client is allowed to see. */
@@ -39,9 +48,13 @@ export interface RoomView {
   variant: Variant;
   /** Index into `players` of the host. */
   host: number;
-  players: { name: string; seat: Seat | null; connected: boolean }[];
+  players: { name: string; seat: Seat | null; connected: boolean; bot: boolean }[];
   match: MatchState | null;
   actionDeadline: number | null;
+  /** True for Quick Play rooms: anyone can be matched in and the match starts by itself. */
+  public: boolean;
+  /** Quick Play: when the match will start, if a countdown is running. */
+  startsAt: number | null;
 }
 
 /** 3–16 letters, numbers or underscores; anything else becomes "Guest". */
@@ -52,6 +65,9 @@ export class Room {
   private players: Player[] = [];
   private match: MatchState | null = null;
   private actionDeadline: number | null = null;
+  private botAt = 0;
+  private startsAt: number | null = null;
+  private readonly created = Date.now();
   /** Last time anything happened, for clearing out abandoned rooms. */
   touched = Date.now();
 
@@ -59,6 +75,7 @@ export class Room {
     readonly code: string,
     readonly variant: Variant,
     private dice: Dice,
+    readonly isPublic = false,
   ) {}
 
   private find(token: string): Player {
@@ -81,7 +98,50 @@ export class Room {
     }
     if (this.match) throw new RoomError('That match has already started');
     if (this.players.length >= MAX_PLAYERS) throw new RoomError('That room is full');
-    this.players.push({ token, name: cleanName(name), seat: null, connected: true });
+    this.players.push({ token, name: cleanName(name), seat: null, connected: true, bot: false });
+    this.scheduleStart();
+  }
+
+  /** Open to Quick Play matchmaking: not started and not full. */
+  get joinable(): boolean {
+    return this.isPublic && !this.match && this.players.length < MAX_PLAYERS && !this.empty;
+  }
+
+  /** Quick Play rooms start by themselves: at once when full, after a short countdown otherwise. */
+  private scheduleStart(now = Date.now()) {
+    if (!this.isPublic || this.match) return;
+    if (this.players.length < 2) this.startsAt = null;
+    else if (this.players.length >= MAX_PLAYERS) this.startsAt = now;
+    else this.startsAt ??= now + PUBLIC_START_DELAY_MS;
+  }
+
+  /**
+   * Quick Play housekeeping while waiting. Fills empty seats with bots when nobody
+   * else turns up, and starts the match when the countdown ends. Returns true if anything changed.
+   */
+  lobbyTick(now = Date.now()): boolean {
+    if (!this.isPublic || this.match || this.empty) return false;
+    if (this.players.length < 2 && now >= Math.max(this.created, this.touched) + BOT_FILL_MS) {
+      while (this.players.length < MAX_PLAYERS)
+        this.players.push({ token: `bot:${this.players.length}`, name: BOT_NAMES[this.players.length - 1]!, seat: null, connected: true, bot: true });
+      this.startsAt = now;
+    }
+    if (this.startsAt === null || now < this.startsAt) return false;
+    this.begin();
+    return true;
+  }
+
+  /** After a finished match, return everyone still here to the waiting room for another game. */
+  rematch(token: string) {
+    this.find(token);
+    if (!this.match || this.match.turn.phase !== 'over') throw new RoomError('The match is not over yet');
+    this.touched = Date.now();
+    this.match = null;
+    this.actionDeadline = null;
+    this.startsAt = null;
+    this.players = this.players.filter((p) => p.connected && !p.bot);
+    this.players.forEach((p) => (p.seat = null));
+    this.scheduleStart();
   }
 
   disconnect(token: string) {
@@ -89,7 +149,10 @@ export class Room {
     if (!player) return;
     // Before the match starts a dropped player simply leaves; afterwards the seat is held for them.
     if (this.match) player.connected = false;
-    else this.players = this.players.filter((p) => p !== player);
+    else {
+      this.players = this.players.filter((p) => p !== player);
+      this.scheduleStart();
+    }
   }
 
   start(token: string) {
@@ -97,10 +160,17 @@ export class Room {
     if (this.players[0] !== this.find(token)) throw new RoomError('Only the host can start the match');
     if (this.match) throw new RoomError('The match has already started');
     if (this.players.length < 2) throw new RoomError('At least two players are needed');
+    this.begin();
+  }
+
+  private begin() {
+    this.touched = Date.now();
+    this.startsAt = null;
     const seats = defaultSeats(this.players.length);
     this.players.forEach((p, i) => (p.seat = seats[i]!));
     this.match = createMatch({ seats, config: VARIANTS[this.variant] });
     this.actionDeadline = Date.now() + ACTION_TIMEOUT_MS;
+    this.botAt = Date.now() + BOT_DELAY_MS;
   }
 
   private turnOf(token: string): { match: MatchState; seat: Seat } {
@@ -126,20 +196,24 @@ export class Room {
     this.touched = Date.now();
     this.match = result.state;
     this.actionDeadline = this.match.turn.phase === 'over' ? null : Date.now() + ACTION_TIMEOUT_MS;
+    this.botAt = Date.now() + BOT_DELAY_MS;
     return result.events;
   }
 
   /** One authoritative action per deadline. Empty rooms remain idle for expiry. */
   tick(now = Date.now()): GameEvent[] {
-    if (this.empty || !this.match || this.actionDeadline === null || now < this.actionDeadline) return [];
+    if (this.empty || !this.match || this.actionDeadline === null) return [];
     const seat = this.match.turn.seat;
+    // Bots act after a short pause; people get the full time limit before the server plays for them.
+    const bot = this.players.some((p) => p.bot && p.seat === seat);
+    if (now < (bot ? this.botAt : this.actionDeadline)) return [];
     return this.apply(applyAction(this.match, this.match.turn.phase === 'roll'
       ? { type: 'roll', seat, value: this.dice.roll() }
       : { type: 'move', seat, pawn: chooseMove(this.match, 'medium', () => 0.5) }));
   }
 
   get empty(): boolean {
-    return this.players.every((p) => !p.connected);
+    return this.players.every((p) => p.bot || !p.connected);
   }
 
   view(): RoomView {
@@ -147,9 +221,11 @@ export class Room {
       code: this.code,
       variant: this.variant,
       host: 0,
-      players: this.players.map(({ name, seat, connected }) => ({ name, seat, connected })),
+      players: this.players.map(({ name, seat, connected, bot }) => ({ name, seat, connected, bot })),
       match: this.match,
       actionDeadline: this.actionDeadline,
+      public: this.isPublic,
+      startsAt: this.startsAt,
     };
   }
 }

@@ -4,6 +4,17 @@ Written 2026-11-16 for the next developer or coding agent. The product spec is t
 
 ## Where things stand
 
+### Continuation: Quick Play matchmaking, bots and rematch (2026-11-16, uncommitted, NOT deployed)
+
+- **Quick Play** (Stage 5 casual matchmaking): new client message `quick {token,name,variant}`. The server puts the player in an open public room for that mode or opens one. Public rooms start by themselves: at once with four players, after an 8-second countdown from the second player. `Room.isPublic`, `joinable`, `lobbyTick()`; `RoomView.public` and `startsAt`.
+- **Bots:** if nobody else joins a Quick Play room within 15 seconds, the empty seats are filled with computer players (`Player.bot`, shown as "Bot" in the waiting room) and the match starts. Bots act through `Room.tick()` after a 1.2-second pause using the medium AI. They never appear in private rooms. Bot tokens are `bot:N`; client tokens are always prefixed `guest:` or `google:` in `index.ts`, so a client cannot claim one.
+- **Rematch:** message `rematch` after a finished match returns connected players to the waiting room and drops bots and disconnected players. Private rooms then wait for the host to start; public rooms search and count down again. The results sheet's "Play again" sends it when online.
+- Web: PLAY sheet has a working Quick Play button (uses the selected Classic / Race / Clash mode); the waiting sheet shows "Finding players…" or the countdown for public rooms.
+- Validation: **121 tests pass** (9 new in `apps/server/test/quickplay.test.ts`), typecheck clean. In a local browser, Quick Play showed the waiting room, bots filled after 15 seconds, and a four-player Quick Race ran for about five minutes with bots taking turns. **Not verified:** that browser match was not played to its end, "Play again"/rematch was not exercised in a browser or over real sockets (room-level tests only), and two real people being matched together was not tested in browsers.
+- **The live site at loodle.online does not have any of this** until it is committed, pushed and deployed in Render (auto-deploy is off).
+- Known gaps: one bot difficulty; matchmaking is one in-memory process with no regions, skill or reconnection to the queue; a Quick Play room with bots is slow for four players (about 1.2 s per bot action).
+- Also on 2026-11-16: loodle.online failed to load on the owner's PC only because the Windows DNS cache held Namecheap's old parking address `162.255.119.8`. It expired by itself; DNS and hosting were correct throughout. `ipconfig /flushdns` needs an administrator terminal on that machine.
+
 ### Live Render deployment (2026-11-16)
 
 - Owner approved and deployed the free-tier Blueprint. Service `srv-dbtj1mei0phs73dgdf60` (`loodle-n26t`) is live at `https://loodle-n26t.onrender.com`, in My Workspace. Current verified deploy: `dep-dbtj2ap5efls73f9p170`, source commit `45d9d68104badfb16cc1a418adccb3e4e0a683bf`. Blueprint `exs-dbtiu9jl550s73ddm7c0` is manually synced; auto-deploy remains off.

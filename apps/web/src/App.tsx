@@ -189,7 +189,7 @@ export function App() {
   };
 
   /** Create a room, or join one by code. The server owns the match from here on. */
-  const enterRoom = (first: { t: 'create'; variant: string } | { t: 'join'; code: string }) => {
+  const enterRoom = (first: { t: 'create' | 'quick'; variant: string } | { t: 'join'; code: string }) => {
     setNetError('');
     if (!networkSession) offlineMatch.current = match ? { match, humans, level } : null;
     setNetworkSession(true);
@@ -209,6 +209,9 @@ export function App() {
         setNetError('');
         const mine = m.room.players[m.you]?.seat;
         if (!m.room.match || mine === null || mine === undefined) {
+          // Waiting room: before the first match, or back here after a rematch.
+          setMatch(null);
+          setScreen('lobby');
           setSheet('friends');
           return;
         }
@@ -496,9 +499,10 @@ export function App() {
                 </strong>
               </div>
             ))}
-            <button className="mode on" onClick={online ? leaveRoom : startMatch}>
+            <button className="mode on" onClick={online ? () => conn.current?.send({ t: 'rematch' }) : startMatch}>
               <span>
-                <strong>{online ? 'Leave room' : 'Play again'}</strong>
+                <strong>Play again</strong>
+                {online && <small>{online.room.public ? 'Find a new match with the players still here' : 'Back to the room with the same players'}</small>}
               </span>
               <Chevron />
             </button>
@@ -605,8 +609,14 @@ export function App() {
             </span>
             <Chevron />
           </button>
+          <button className="mode" onClick={() => enterRoom({ t: 'quick', variant })}>
+            <span>
+              <strong>Quick Play</strong>
+              <small>Online match with whoever is around · {variant === 'classic' ? 'Classic' : `Quick ${VARIANTS[variant].label}`}</small>
+            </span>
+            <Chevron />
+          </button>
           {[
-            ['Quick Play', 'Fast online match'],
             ['Ranked', 'Linked accounts only'],
           ].map(([title, sub]) => (
             <button className="mode" disabled key={title}>
@@ -655,21 +665,31 @@ export function App() {
             </>
           ) : online ? (
             <>
-              <div className="setting stacked room-code">
-                <small>Share this code</small>
-                <strong>{online.room.code}</strong>
-                <small>30 seconds per roll or move, then automatic play</small>
-              </div>
+              {online.room.public ? (
+                <div className="setting stacked room-code">
+                  <strong className="finding">
+                    {online.room.startsAt ? `Starting in ${Math.max(0, Math.ceil((online.room.startsAt - now) / 1000))}s` : 'Finding players…'}
+                  </strong>
+                  <small>If nobody else joins within 15 seconds, computer players (marked Bot) fill the seats.</small>
+                  <small>30 seconds per roll or move, then automatic play</small>
+                </div>
+              ) : (
+                <div className="setting stacked room-code">
+                  <small>Share this code</small>
+                  <strong>{online.room.code}</strong>
+                  <small>30 seconds per roll or move, then automatic play</small>
+                </div>
+              )}
               {online.room.players.map((pl, i) => (
                 <div className="setting" key={i}>
                   <strong>
                     {pl.name}
                     {i === online.you ? ' (you)' : ''}
                   </strong>
-                  <small>{!pl.connected ? 'Disconnected' : i === online.room.host ? 'Host' : 'Joined'}</small>
+                  <small>{pl.bot ? 'Bot' : !pl.connected ? 'Disconnected' : online.room.public ? 'Ready' : i === online.room.host ? 'Host' : 'Joined'}</small>
                 </div>
               ))}
-              {online.you === online.room.host ? (
+              {online.room.public ? null : online.you === online.room.host ? (
                 <button className="mode on" disabled={netStatus !== 'connected' || online.room.players.length < 2} onClick={() => conn.current?.send({ t: 'start' })}>
                   <span>
                     <strong>Start match</strong>
