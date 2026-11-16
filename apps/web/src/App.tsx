@@ -21,6 +21,7 @@ import { BoardScene, type CameraMode, type Quality } from './scene/BoardScene';
 import { Logo } from './ui/Logo';
 import { Die } from './ui/Die';
 import { play, setSoundEnabled, type Sfx } from './sound';
+import { connect, playerToken, type Connection, type RoomView, type ServerMessage } from './net';
 import { Back, Chest, Chevron, Crown, Gear, Pawn, People } from './ui/icons';
 
 type Screen = 'lobby' | 'board';
@@ -117,7 +118,7 @@ export function App() {
   const scene = useRef<BoardScene | null>(null);
   const [screen, setScreen] = useState<Screen>('lobby');
   const [view, setView] = useState<View>('angled');
-  const [sheet, setSheet] = useState<'play' | 'settings' | 'help' | null>(null);
+  const [sheet, setSheet] = useState<'play' | 'settings' | 'help' | 'friends' | null>(null);
   const [variant, setVariant] = useState<Variant>('classic');
   const [quality, setQuality] = useState<Quality>(loadQuality);
   const saved = useMemo(loadSaved, []);
@@ -136,6 +137,64 @@ export function App() {
   const [message, setMessage] = useState('');
   const [face, setFace] = useState(6);
   const [rolling, setRolling] = useState(false);
+  const [online, setOnline] = useState<{ room: RoomView; you: number } | null>(null);
+  const [netError, setNetError] = useState('');
+  const [name, setName] = useState(() => {
+    try {
+      return localStorage.getItem('loodl.name') ?? '';
+    } catch {
+      return '';
+    }
+  });
+  const [code, setCode] = useState('');
+  const conn = useRef<Connection | null>(null);
+
+  const leaveRoom = () => {
+    conn.current?.send({ t: 'leave' });
+    conn.current?.close();
+    conn.current = null;
+    setOnline(null);
+    setMatch(null);
+    setScreen('lobby');
+  };
+
+  /** Create a room, or join one by code. The server owns the match from here on. */
+  const enterRoom = (first: { t: 'create'; variant: string } | { t: 'join'; code: string }) => {
+    setNetError('');
+    try {
+      localStorage.setItem('loodl.name', name);
+    } catch {
+      /* ignore */
+    }
+    conn.current?.close();
+    conn.current = connect(
+      { ...first, token: playerToken(), name },
+      (m: ServerMessage) => {
+        if (m.t === 'error') return setNetError(m.message);
+        setOnline({ room: m.room, you: m.you });
+        const mine = m.room.players[m.you]?.seat;
+        if (!m.room.match || mine === null || mine === undefined) return;
+        setHumans([mine]);
+        setMatch(m.room.match);
+        setSheet(null);
+        setScreen('board');
+        const rolled = m.events.find((e) => e.type === 'rolled');
+        if (rolled && rolled.type === 'rolled') setFace(rolled.value);
+        if (m.events.length) setMessage(describe(m.events));
+        const sfx = (Object.keys(SOUNDS) as GameEvent['type'][]).find((type) => m.events.some((e) => e.type === type));
+        if (sfx) play(SOUNDS[sfx]!);
+        else if (rolled) play('roll');
+      },
+      () => {
+        conn.current = null;
+        setOnline(null);
+        setNetError('Lost connection to the game server. Join again with the same code to take your seat back.');
+        setMatch(null);
+        setScreen('lobby');
+        setSheet('friends');
+      },
+    );
+  };
 
   const moves = useMemo(() => (match?.turn.phase === 'move' ? legalMoves(match) : []), [match]);
   // If every legal move starts from the same spot there is nothing to choose.
@@ -152,13 +211,16 @@ export function App() {
 
   const move = useCallback(
     (pawn: number) => {
-      if (match?.turn.phase === 'move' && moves.some((m) => m.pawn === pawn)) act(match, { type: 'move', seat: match.turn.seat, pawn });
+      if (match?.turn.phase !== 'move' || !moves.some((m) => m.pawn === pawn)) return;
+      if (online) conn.current?.send({ t: 'move', pawn });
+      else act(match, { type: 'move', seat: match.turn.seat, pawn });
     },
-    [match, moves, act],
+    [match, moves, act, online],
   );
 
   const roll = () => {
     if (!match || match.turn.phase !== 'roll' || rolling) return;
+    if (online) return void conn.current?.send({ t: 'roll' }); // the server rolls
     setRolling(true);
     setMessage('');
     play('roll');
@@ -202,7 +264,7 @@ export function App() {
 
   // Computer players: roll, then choose a move. They only pick among legal moves.
   useEffect(() => {
-    if (!match || screen !== 'board' || match.turn.phase === 'over' || human || rolling) return;
+    if (online || !match || screen !== 'board' || match.turn.phase === 'over' || human || rolling) return;
     const seat = match.turn.seat;
     const id = window.setTimeout(
       () => (match.turn.phase === 'roll' ? roll() : act(match, { type: 'move', seat, pawn: chooseMove(match, level, Math.random) })),
@@ -210,17 +272,18 @@ export function App() {
     );
     return () => window.clearTimeout(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [match, screen, human, rolling, level]);
+  }, [match, screen, human, rolling, level, online]);
 
   // Keep the match across reloads.
   useEffect(() => {
+    if (online) return; // online matches live on the server
     try {
       if (match && match.turn.phase !== 'over') localStorage.setItem(SAVE_KEY, JSON.stringify({ match: serializeMatch(match), humans, level }));
       else localStorage.removeItem(SAVE_KEY);
     } catch {
       /* storage unavailable: the match just won't survive a reload */
     }
-  }, [match, humans, level]);
+  }, [match, humans, level, online]);
 
   useEffect(() => {
     setSoundEnabled(sound);
@@ -253,7 +316,8 @@ export function App() {
   const over = turn?.phase === 'over';
   const clash = !!match && match.config.targetScore !== null;
   const vsAi = !!match && humans.length < match.seats.length;
-  const who = (seat: Seat) => (!vsAi ? seatName(seat) : humans.includes(seat) ? 'You' : RIVALS[level]);
+  const rival = (seat: Seat) => (online ? (online.room.players.find((pl) => pl.seat === seat)?.name ?? seatName(seat)) : RIVALS[level]);
+  const who = (seat: Seat) => (!vsAi ? seatName(seat) : humans.includes(seat) ? 'You' : rival(seat));
 
   return (
     <div className={`app screen-${screen}`}>
@@ -287,7 +351,7 @@ export function App() {
             </button>
             <nav className="tiles" aria-label="More ways to play">
               <Tile icon={<Pawn />} title="Solo" sub="Play Offline" tone="gold" onClick={() => (setSolo(true), setSheet('play'))} />
-              <Tile icon={<People />} title="Friends" sub="Play Together" tone="blue" />
+              <Tile icon={<People />} title="Friends" sub="Play Together" tone="blue" onClick={() => setSheet('friends')} />
               <Tile icon={<Chest />} title="Collection" sub="Boards & Pawns" tone="red" />
             </nav>
           </div>
@@ -297,7 +361,7 @@ export function App() {
       {screen === 'board' && match && turn && (
         <div className="ui board-ui">
           <header className="topbar">
-            <button className="round-btn" aria-label="Back to lobby" onClick={() => setScreen('lobby')}>
+            <button className="round-btn" aria-label="Back to lobby" onClick={() => (online ? leaveRoom() : setScreen('lobby'))}>
               <Back />
             </button>
             {over ? (
@@ -340,7 +404,7 @@ export function App() {
             <footer className="board-foot">
               <div className="readout" aria-live="polite">
                 {(forced || !human ? message.replace(' — tap a pawn', '') : message) ||
-                  (!human ? `${RIVALS[level]} is playing…` : turn.phase === 'roll' ? 'Roll the die' : 'Tap a pawn')}
+                  (!human ? (online ? `Waiting for ${rival(turn.seat)}…` : `${RIVALS[level]} is playing…`) : turn.phase === 'roll' ? 'Roll the die' : 'Tap a pawn')}
               </div>
               <div className="roll-row">
                 <Die value={face} rolling={rolling} />
@@ -372,13 +436,13 @@ export function App() {
                 </strong>
               </div>
             ))}
-            <button className="mode on" onClick={startMatch}>
+            <button className="mode on" onClick={online ? leaveRoom : startMatch}>
               <span>
-                <strong>Play again</strong>
+                <strong>{online ? 'Leave room' : 'Play again'}</strong>
               </span>
               <Chevron />
             </button>
-            <button className="mode" onClick={() => (setMatch(null), setScreen('lobby'))}>
+            <button className="mode" onClick={() => (online ? leaveRoom() : (setMatch(null), setScreen('lobby')))}>
               <span>
                 <strong>Back to lobby</strong>
               </span>
@@ -467,9 +531,15 @@ export function App() {
             </span>
             <Chevron />
           </button>
+          <button className="mode" onClick={() => setSheet('friends')}>
+            <span>
+              <strong>Friends</strong>
+              <small>Private room with an invite code</small>
+            </span>
+            <Chevron />
+          </button>
           {[
             ['Quick Play', 'Fast online match'],
-            ['Friends', 'Private room with an invite code'],
             ['Ranked', 'Linked accounts only'],
           ].map(([title, sub]) => (
             <button className="mode" disabled key={title}>
@@ -480,6 +550,69 @@ export function App() {
               <em>Soon</em>
             </button>
           ))}
+        </Sheet>
+      )}
+
+      {sheet === 'friends' && (
+        <Sheet title="Play with friends" onClose={() => (online && !online.room.match ? leaveRoom() : null, setSheet(null))}>
+          {netError && <p className="net-error">{netError}</p>}
+          {!online ? (
+            <>
+              <label className="setting">
+                <span>
+                  <strong>Your name</strong>
+                  <small>3–16 letters, numbers or _</small>
+                </span>
+                <input value={name} maxLength={16} placeholder="Guest" onChange={(e) => setName(e.target.value.replace(/[^A-Za-z0-9_]/g, ''))} />
+              </label>
+              <button className="mode on" onClick={() => enterRoom({ t: 'create', variant })}>
+                <span>
+                  <strong>Create a room</strong>
+                  <small>{variant === 'classic' ? 'Classic Ludo' : `Quick ${VARIANTS[variant].label}`} · you get a code to share</small>
+                </span>
+                <Chevron />
+              </button>
+              <label className="setting">
+                <span>
+                  <strong>Have a code?</strong>
+                </span>
+                <input value={code} maxLength={5} placeholder="ABCDE" className="code" onChange={(e) => setCode(e.target.value.toUpperCase())} />
+              </label>
+              <button className="mode" disabled={code.length !== 5} onClick={() => enterRoom({ t: 'join', code })}>
+                <span>
+                  <strong>Join room</strong>
+                </span>
+                <Chevron />
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="setting stacked room-code">
+                <small>Share this code</small>
+                <strong>{online.room.code}</strong>
+              </div>
+              {online.room.players.map((pl, i) => (
+                <div className="setting" key={i}>
+                  <strong>
+                    {pl.name}
+                    {i === online.you ? ' (you)' : ''}
+                  </strong>
+                  <small>{i === online.room.host ? 'Host' : 'Joined'}</small>
+                </div>
+              ))}
+              {online.you === online.room.host ? (
+                <button className="mode on" disabled={online.room.players.length < 2} onClick={() => conn.current?.send({ t: 'start' })}>
+                  <span>
+                    <strong>Start match</strong>
+                    <small>{online.room.players.length < 2 ? 'Waiting for another player…' : `${online.room.players.length} players ready`}</small>
+                  </span>
+                  <Chevron />
+                </button>
+              ) : (
+                <p className="hint">Waiting for the host to start…</p>
+              )}
+            </>
+          )}
         </Sheet>
       )}
 

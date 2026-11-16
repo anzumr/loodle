@@ -824,3 +824,47 @@ button:focus-visible {
   color: var(--gold-300);
   font-weight: 800;
 }
+
+.setting input {
+  width: 46%;
+  min-width: 0;
+  height: 44px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 12px;
+  font: inherit;
+  font-weight: 800;
+  color: var(--text);
+  background: rgba(6, 13, 43, 0.85);
+  box-shadow: inset 0 0 0 2px rgba(120, 165, 255, 0.45);
+  user-select: text;
+  -webkit-user-select: text;
+}
+.setting input:focus {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--gold-300);
+}
+.setting input.code {
+  letter-spacing: 0.3em;
+  text-align: center;
+}
+.room-code {
+  align-items: center !important;
+}
+.room-code strong {
+  font-family: var(--display);
+  font-weight: 400;
+  font-size: 44px;
+  letter-spacing: 0.2em;
+  color: var(--gold-300);
+  user-select: text;
+  -webkit-user-select: text;
+}
+.net-error {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 14px;
+  background: rgba(229, 38, 47, 0.25);
+  box-shadow: inset 0 0 0 1.5px var(--red);
+}
