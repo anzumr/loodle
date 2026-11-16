@@ -11,7 +11,7 @@ services:
       - loodle.online
     envVars:
       - key: PUBLIC_ORIGIN
-        value: https://loodle.online,https://www.loodle.online
+        value: https://loodle.online,https://www.loodle.online,https://loodle-n26t.onrender.com
       - key: AUTH_SECRET
         generateValue: true
       - key: GOOGLE_CLIENT_ID
