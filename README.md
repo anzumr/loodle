@@ -2,7 +2,7 @@
 
 A web-first 3D multiplayer Ludo game. Roll. Rival. Repeat.
 
-Current state: **Stage 0 prototype.** A lobby and an interactive 3D classic board run in the browser. There is no playable match yet (no dice, turns or movement).
+Current state: **classic pass-and-play works.** Two to four players can share one device and play a full classic match on the 3D board. There is no AI, online play, accounts, sound or saved matches yet.
 
 ## Run it
 
@@ -27,11 +27,13 @@ Open http://localhost:5173. To try it on a phone, open the "Network" address Vit
 ```
 packages/rules   Pure TypeScript game logic. No rendering or browser imports.
   src/classicBoard.ts   Classic 15×15 board: every cell, path, start, star, lane.
+  src/engine.ts         Rules engine: legal moves, captures, blockades, bonuses, finishing, replay.
   test/                 Topology tests.
 apps/web         The website (Vite + React + three.js).
   src/scene/BoardScene.ts   3D board, pawns, lighting, cameras, tap picking.
   src/App.tsx               Lobby, mode sheet, board screen.
   src/styles.css            LOODL blue-and-gold UI theme.
+docs/RULES.md                Rules as implemented, settings, and interpretations.
 docs/TECH_DECISIONS.md      Stack choice, tradeoffs, mobile risks, placeholder list.
 ```
 

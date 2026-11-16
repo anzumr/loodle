@@ -3,12 +3,12 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import {
-  FINISH,
   LANES,
   SEATS,
   SEAT_NAMES,
   TRACK,
   YARD_ORIGINS,
+  pathForSeat,
   yardSpots,
   type BoardNode,
   type Cell,
@@ -18,10 +18,15 @@ import {
 export type CameraMode = 'lobby' | 'angled' | 'top';
 export type Quality = 'high' | 'low';
 
-export type Pick =
-  | { type: 'node'; node: BoardNode }
-  | { type: 'pawn'; seat: Seat; index: number }
-  | null;
+/** What the scene needs to know about a match in order to draw it. */
+export interface MatchView {
+  /** pawns[seat][pawn] = progress (-1 yard, 0-55 on the path, 56 home). */
+  pawns: number[][];
+  /** Seat whose turn it is. */
+  seat: Seat;
+  /** Pawns of that seat that may be tapped to move right now. */
+  movable: number[];
+}
 
 const SEAT_HEX = [0xe5262f, 0x14a44f, 0xf8c21c, 0x1c96ee] as const;
 const SEAT_DARK = [0xa3121a, 0x0b7436, 0xc28a05, 0x0f67b0] as const;
@@ -32,6 +37,14 @@ const BED = 0x1b2550;
 const TILE_TOP = 0.2;
 const YARD_TOP = 0.34;
 const HALF = 7;
+
+interface PawnAnim {
+  from: THREE.Vector3;
+  to: THREE.Vector3;
+  s0: number;
+  s1: number;
+  t: number;
+}
 
 /** Grid cell (fractional allowed) → world position on the board plane. */
 const toWorld = (c: Cell, y = 0) => new THREE.Vector3(c.col - HALF, y, c.row - HALF);
@@ -62,17 +75,16 @@ const glossy = (color: number, extra: THREE.MeshPhysicalMaterialParameters = {})
   new THREE.MeshPhysicalMaterial({ color, roughness: 0.35, clearcoat: 0.6, clearcoatRoughness: 0.25, ...extra });
 
 export class BoardScene {
-  onPick: (pick: Pick) => void = () => {};
+  onPawnTap: (pawn: number) => void = () => {};
 
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
   private camera = new THREE.PerspectiveCamera(38, 1, 0.1, 200);
   private controls: OrbitControls;
   private sun: THREE.DirectionalLight;
-  private raycaster = new THREE.Raycaster();
-  private pickables: THREE.Object3D[] = [];
-  private marker: THREE.Mesh;
-  private pawns: THREE.Group[] = [];
+  private rings: THREE.Mesh[] = [];
+  private pawns: THREE.Group[][] = [];
+  private view: MatchView | null = null;
   private die = new THREE.Group();
   private resizeObserver: ResizeObserver;
   private clock = new THREE.Clock();
@@ -118,14 +130,16 @@ export class BoardScene {
     this.buildPawns();
     this.buildDie();
 
-    this.marker = new THREE.Mesh(
-      new THREE.TorusGeometry(0.5, 0.075, 12, 40),
-      new THREE.MeshBasicMaterial({ color: 0xffd23f, depthTest: false, transparent: true }),
-    );
-    this.marker.rotation.x = Math.PI / 2;
-    this.marker.visible = false;
-    this.marker.renderOrder = 10;
-    this.scene.add(this.marker);
+    const ringGeo = new THREE.TorusGeometry(0.5, 0.075, 12, 40);
+    const ringMat = new THREE.MeshBasicMaterial({ color: 0xffd23f, depthTest: false, transparent: true });
+    for (let i = 0; i < 4; i++) {
+      const ring = new THREE.Mesh(ringGeo, ringMat);
+      ring.rotation.x = Math.PI / 2;
+      ring.renderOrder = 10;
+      ring.visible = false;
+      this.scene.add(ring);
+      this.rings.push(ring);
+    }
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enablePan = false;
@@ -207,8 +221,6 @@ export class BoardScene {
     const addTile = (node: BoardNode, mat: THREE.Material) => {
       const tile = this.add(new THREE.Mesh(tileGeo, mat));
       tile.position.copy(toWorld(node, TILE_TOP / 2));
-      tile.userData.node = node;
-      this.pickables.push(tile);
     };
     for (const node of TRACK) {
       addTile(node, node.start ? seatMats[node.seat!]! : cream);
@@ -241,9 +253,7 @@ export class BoardScene {
     ];
     for (const seat of SEATS) {
       const [a, b] = edges[seat]!;
-      const tri = this.add(new THREE.Mesh(flat([corners[a]!, corners[b]!, [0, 0]], 0.26, 0.03), seatMats[seat]));
-      tri.userData.node = FINISH[seat];
-      this.pickables.push(tri);
+      this.add(new THREE.Mesh(flat([corners[a]!, corners[b]!, [0, 0]], 0.26, 0.03), seatMats[seat]));
     }
   }
 
@@ -267,7 +277,7 @@ export class BoardScene {
     const ringMat = new THREE.MeshPhysicalMaterial({ color: GOLD, metalness: 1, roughness: 0.25 });
     for (const seat of SEATS) {
       const mat = glossy(SEAT_HEX[seat], { roughness: 0.18, clearcoat: 1, clearcoatRoughness: 0.08 });
-      yardSpots(seat).forEach((spot, index) => {
+      this.pawns[seat] = yardSpots(seat).map(() => {
         const pawn = new THREE.Group();
         const body = new THREE.Mesh(bodyGeo, mat);
         const head = new THREE.Mesh(headGeo, mat);
@@ -279,13 +289,67 @@ export class BoardScene {
           m.castShadow = true;
           pawn.add(m);
         }
-        pawn.scale.setScalar(1.25);
-        pawn.position.copy(toWorld(spot, YARD_TOP + 0.125));
-        pawn.userData.pawn = { seat, index };
         this.scene.add(pawn);
-        this.pawns.push(pawn);
-        this.pickables.push(pawn);
+        return pawn;
       });
+    }
+    this.layoutPawns(false);
+  }
+
+  // ---------- match display ----------
+
+  /** Show a match, or pass null for the idle board with every pawn in its yard. */
+  setView(view: MatchView | null) {
+    this.view = view;
+    this.layoutPawns(true);
+  }
+
+  /** Where each pawn should stand, spreading out pawns that share a square. */
+  private layoutPawns(animate: boolean) {
+    const sharing = new Map<string, number>();
+    const slots: { pawn: THREE.Group; pos: THREE.Vector3; scale: number; key?: string }[] = [];
+    for (const seat of SEATS) {
+      const steps = this.view ? (this.view.pawns[seat] ?? []) : [-1, -1, -1, -1];
+      const path = pathForSeat(seat);
+      this.pawns[seat]!.forEach((pawn, i) => {
+        const step = steps[i];
+        pawn.visible = step !== undefined;
+        if (step === undefined) return;
+        if (step < 0) {
+          slots.push({ pawn, pos: toWorld(yardSpots(seat)[i]!, YARD_TOP + 0.125), scale: 1.25 });
+        } else if (step >= path.length - 1) {
+          // Home: line up inside the seat's own centre triangle.
+          const lane = toWorld(LANES[seat]![4]!).normalize();
+          const side = new THREE.Vector3(-lane.z, 0, lane.x).multiplyScalar((i - 1.5) * 0.36);
+          slots.push({ pawn, pos: lane.multiplyScalar(0.95).add(side).setY(0.29), scale: 0.72 });
+        } else {
+          const node = path[step]!;
+          sharing.set(node.id, (sharing.get(node.id) ?? 0) + 1);
+          slots.push({ pawn, pos: toWorld(node, TILE_TOP), scale: 1.1, key: node.id });
+        }
+      });
+    }
+    const placed = new Map<string, number>();
+    for (const slot of slots) {
+      const count = slot.key ? sharing.get(slot.key)! : 1;
+      if (slot.key && count > 1) {
+        const n = placed.get(slot.key) ?? 0;
+        placed.set(slot.key, n + 1);
+        const a = (n / count) * Math.PI * 2 + Math.PI / 4;
+        slot.pos.x += Math.cos(a) * 0.24;
+        slot.pos.z += Math.sin(a) * 0.24;
+        slot.scale = 0.78;
+      }
+      const { pawn, pos, scale } = slot;
+      const anim = pawn.userData.anim as PawnAnim | undefined;
+      const current = anim?.to ?? pawn.position;
+      if (!animate) {
+        pawn.position.copy(pos);
+        pawn.scale.setScalar(scale);
+        pawn.userData.anim = undefined;
+      } else if (current.distanceTo(pos) > 0.01 || Math.abs((anim?.s1 ?? pawn.scale.x) - scale) > 0.01) {
+        pawn.userData.anim = { from: pawn.position.clone(), to: pos, s0: pawn.scale.x, s1: scale, t: 0 } satisfies PawnAnim;
+      }
     }
   }
 
@@ -336,7 +400,7 @@ export class BoardScene {
     const tan = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2));
     // In play, keep the board clear of the HUD bars at the top and bottom.
     const h = this.container.clientHeight || 1;
-    const usable = this.mode === 'lobby' ? 1 : (h - (h < 500 ? 120 : 190)) / h;
+    const usable = this.mode === 'lobby' ? 1 : (h - (h < 500 ? 110 : 300)) / h;
     return 9.1 / (tan * Math.min(usable, aspect));
   }
 
@@ -369,7 +433,6 @@ export class BoardScene {
     if (mode === 'lobby') this.lobbySpin = to.theta = from.theta;
     this.controls.enabled = false;
     this.transition = { from, to, t: 0 };
-    if (mode === 'lobby') this.select(null);
   }
 
   private finishTransition() {
@@ -397,30 +460,26 @@ export class BoardScene {
     this.down = null;
     if (!d || this.mode === 'lobby' || this.transition) return;
     if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 8) return; // it was a drag
+    const view = this.view;
+    if (!view || view.movable.length === 0) return;
+    // Pick the movable pawn nearest the tap, measured on screen. This is far
+    // more forgiving for fingers than requiring a hit on the pawn's mesh.
     const rect = this.renderer.domElement.getBoundingClientRect();
-    const ndc = new THREE.Vector2(
-      ((e.clientX - rect.left) / rect.width) * 2 - 1,
-      -((e.clientY - rect.top) / rect.height) * 2 + 1,
-    );
-    this.raycaster.setFromCamera(ndc, this.camera);
-    const hit = this.raycaster.intersectObjects(this.pickables, true)[0];
-    let obj: THREE.Object3D | null = hit?.object ?? null;
-    while (obj && !obj.userData.node && !obj.userData.pawn) obj = obj.parent;
-    if (!obj) return this.select(null);
-    if (obj.userData.pawn) {
-      const { seat, index } = obj.userData.pawn as { seat: Seat; index: number };
-      this.select({ type: 'pawn', seat, index }, obj.position);
-    } else {
-      const node = obj.userData.node as BoardNode;
-      this.select({ type: 'node', node }, toWorld(node, node.kind === 'finish' ? 0.3 : TILE_TOP));
+    let best = -1;
+    let bestDist = Math.max(34, rect.width * 0.045);
+    for (const index of view.movable) {
+      const pawn = this.pawns[view.seat]![index]!;
+      const p = pawn.position.clone().setY(pawn.position.y + 0.45).project(this.camera);
+      const x = rect.left + ((p.x + 1) / 2) * rect.width;
+      const y = rect.top + ((1 - p.y) / 2) * rect.height;
+      const dist = Math.hypot(e.clientX - x, e.clientY - y);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = index;
+      }
     }
+    if (best >= 0) this.onPawnTap(best);
   };
-
-  private select(pick: Pick, at?: THREE.Vector3) {
-    this.marker.visible = !!pick && !!at;
-    if (at) this.marker.position.set(at.x, at.y + 0.06, at.z);
-    this.onPick(pick);
-  }
 
   setQuality(q: Quality) {
     const high = q === 'high';
@@ -473,10 +532,28 @@ export class BoardScene {
       this.controls.update();
     }
 
-    if (this.marker.visible) {
-      const s = 1 + Math.sin(time * 5) * 0.08;
-      this.marker.scale.set(s, s, 1);
-    }
+    for (const group of this.pawns)
+      for (const pawn of group) {
+        const anim = pawn.userData.anim as PawnAnim | undefined;
+        if (!anim) continue;
+        anim.t = Math.min(1, anim.t + dt / 0.38);
+        const k = anim.t * anim.t * (3 - 2 * anim.t);
+        pawn.position.lerpVectors(anim.from, anim.to, k);
+        pawn.position.y += Math.sin(Math.PI * k) * Math.min(1.2, 0.35 + anim.from.distanceTo(anim.to) * 0.12);
+        pawn.scale.setScalar(THREE.MathUtils.lerp(anim.s0, anim.s1, k));
+        if (anim.t >= 1) pawn.userData.anim = undefined;
+      }
+
+    const movable = this.view && this.mode !== 'lobby' ? this.view.movable : [];
+    this.rings.forEach((ring, i) => {
+      const index = movable[i];
+      ring.visible = index !== undefined;
+      if (index === undefined) return;
+      const pawn = this.pawns[this.view!.seat]![index]!;
+      const s = (1 + Math.sin(time * 6) * 0.1) * (pawn.scale.x / 1.1);
+      ring.scale.set(s, s, 1);
+      ring.position.set(pawn.position.x, pawn.position.y + 0.07, pawn.position.z);
+    });
     this.renderer.render(this.scene, this.camera);
   };
 
@@ -498,18 +575,3 @@ export class BoardScene {
     el.remove();
   }
 }
-
-export const describePick = (pick: Pick): string => {
-  if (!pick) return 'Tap any square or pawn';
-  if (pick.type === 'pawn') return `${cap(SEAT_NAMES[pick.seat])} pawn ${pick.index + 1} · in yard`;
-  const n = pick.node;
-  const owner = n.seat !== undefined ? cap(SEAT_NAMES[n.seat]) : '';
-  if (n.kind === 'finish') return `${owner} finish`;
-  if (n.kind === 'lane') return `${owner} home lane · square ${Number(n.id.split('-')[1]) + 1} of 5`;
-  const tags = [n.start && `${owner} start`, n.star && 'Star', n.laneEntry && `${owner} lane entry`, n.safe && 'Safe']
-    .filter(Boolean)
-    .join(' · ');
-  return `Track square ${n.trackIndex! + 1} of 52${tags ? ' · ' + tags : ''}`;
-};
-
-const cap = (s: string) => s[0]!.toUpperCase() + s.slice(1);
