@@ -1,0 +1,3 @@
+  Determining projects to restore...
+  Restored C:\Users\anzum\Desktop\LOODL\src\Loodl.Core\Loodl.Core.csproj (in 161 ms).
+  Restored C:\Users\anzum\Desktop\LOODL\tests\Core.Tests\Core.Tests.csproj (in 174 ms).

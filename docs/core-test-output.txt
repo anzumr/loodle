@@ -1,0 +1,10 @@
+  Determining projects to restore...
+  Restored C:\Users\anzum\Desktop\LOODL\src\Loodl.Core\Loodl.Core.csproj (in 2.24 sec).
+  Restored C:\Users\anzum\Desktop\LOODL\tests\Core.Tests\Core.Tests.csproj (in 2.42 sec).
+  Loodl.Core -> C:\Users\anzum\Desktop\LOODL\src\Loodl.Core\bin\Release\netstandard2.1\Loodl.Core.dll
+  Core.Tests -> C:\Users\anzum\Desktop\LOODL\tests\Core.Tests\bin\Release\net10.0\Core.Tests.dll
+Test run for C:\Users\anzum\Desktop\LOODL\tests\Core.Tests\bin\Release\net10.0\Core.Tests.dll (.NETCoreApp,Version=v10.0)
+A total of 1 test files matched the specified pattern.
+Results File: C:\Users\anzum\Desktop\LOODL\tests\Core.Tests\TestResults\core-tests.trx
+
+Passed!  - Failed:     0, Passed:    24, Skipped:     0, Total:    24, Duration: 165 ms - Core.Tests.dll (net10.0)

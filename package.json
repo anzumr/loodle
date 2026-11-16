@@ -1,0 +1,16 @@
+{
+  "name": "loodl",
+  "private": true,
+  "type": "module",
+  "workspaces": ["packages/*", "apps/*"],
+  "scripts": {
+    "dev": "npm run dev -w @loodl/web",
+    "build": "npm run build -w @loodl/web",
+    "test": "vitest run",
+    "typecheck": "tsc -p packages/rules --noEmit && tsc -p apps/web --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
+  }
+}
