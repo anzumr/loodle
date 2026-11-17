@@ -17,7 +17,7 @@ Code: `packages/rules/src/engine.ts`. Tests: `packages/rules/test/engine.test.ts
 | `pawnsPerPlayer` | 4 | 2 or 3 |
 | `bonusOnSix` | on | off |
 | `bonusOnCapture` | on | off |
-| `bonusOnFinish` | **off** | on: bringing a pawn home grants another roll |
+| `bonusOnFinish` | **on** (owner request, 2026-11-17): bringing a pawn home grants another roll | off |
 | `stackBonuses` | **off**: a six that also captures earns one extra roll | on: it earns two |
 | `blockades` | on: two friendly pawns on a shared square stop opponents landing on or passing it | off: no blocking, and a pawn landing there captures both |
 
@@ -39,6 +39,17 @@ These are implemented as fixed behaviour today. Each is a single small change if
 - Die values travel inside roll actions, so an action log replays to the identical match (`replay`). The server will generate the values online; clients will not.
 - `serializeMatch` / `deserializeMatch` save and restore mid-match, validating the data on load.
 - `seededDice` is for tests and simulations only.
+
+## Two dice (optional, proposed details awaiting approval)
+
+Picked per match (Dice: 1 or 2 in the mode menu); setting `dice: 2`. Works with every mode, board size and pawn count, offline and online.
+
+- Each roll is two dice. Each die is a separate move, on the same pawn or two different ones, in either order. The player taps a die to choose which to use; otherwise the first die that suits the tapped pawn is used.
+- A pawn still needs a 6 on one die to come out; the other die can then move it.
+- If a die cannot be used, it is kept while the other die can still change the board (bringing a pawn out can make it usable). When no remaining die has a move, the roll ends.
+- **A double earns another roll** (instead of every six). A capture or a pawn home also earns one, but at most one extra roll per roll unless `stackBonuses` is on.
+- **A third double in a row ends the turn at once with no move**, earlier moves standing. This mirrors the locked three-sixes rule; the one-die game is unchanged.
+- Measured with medium AI, two dice make matches shorter: at 4 players about 78 rolls each instead of 139.
 
 ## Quick modes (proposed definitions, awaiting approval)
 

@@ -102,6 +102,7 @@ export class BoardScene {
   private controls: OrbitControls;
   private sun: THREE.DirectionalLight;
   private rings: THREE.Mesh[] = [];
+  private raycaster = new THREE.Raycaster();
   private pawns: THREE.Group[][] = [];
   private view: MatchView | null = null;
   private pawnMats: THREE.MeshPhysicalMaterial[] = [];
@@ -241,8 +242,13 @@ export class BoardScene {
     const seatMats = SEAT_HEX.map((c) => glossy(c));
     const cream = glossy(CREAM, { roughness: 0.45, clearcoat: 0.35 });
     const tileGeo = new RoundedBoxGeometry(0.93, TILE_TOP, 0.93, 4, 0.07);
-    const starGeo = flat(starPoints(0.3, 0.13), 0.02, 0.01);
-    const starMat = new THREE.MeshStandardMaterial({ color: 0x8e99b3, roughness: 0.5, metalness: 0.3 });
+    // Safe squares: a large star, and star squares get a gold tile so they still read as safe
+    // when a pawn stands on the star. Start squares keep their seat colour with a white star.
+    // The points reach past a pawn's base (radius about 0.38), so they stay visible under it.
+    const starGeo = flat(starPoints(0.5, 0.22), 0.03, 0.01);
+    const starMat = new THREE.MeshStandardMaterial({ color: 0xb87d0a, roughness: 0.45, metalness: 0.35 });
+    const startStarMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.4 });
+    const safeTile = glossy(0xffd76a, { roughness: 0.4, clearcoat: 0.4 });
     const arrowGeo = flat(
       [
         [-0.28, -0.07],
@@ -268,8 +274,8 @@ export class BoardScene {
       // The first five squares of a seat's stretch lie on its own arm, the rest on the next arm.
       const arm = offset < 5 ? block : (block + 1) % n;
       const angle = L.armAngles[arm]!;
-      put(this.add(new THREE.Mesh(tileGeo, offset === 0 ? seatMats[block]! : cream)), p, TILE_TOP / 2, angle);
-      if (offset === 8) put(this.add(new THREE.Mesh(starGeo, starMat), false), p, TILE_TOP, 0);
+      put(this.add(new THREE.Mesh(tileGeo, offset === 0 ? seatMats[block]! : offset === 8 ? safeTile : cream)), p, TILE_TOP / 2, angle);
+      if (offset === 8 || offset === 0) put(this.add(new THREE.Mesh(starGeo, offset === 0 ? startStarMat : starMat), false), p, TILE_TOP, 0);
       if (offset === 11) put(this.add(new THREE.Mesh(arrowGeo, glossy(SEAT_DARK[arm]!)), false), p, TILE_TOP, angle);
     });
     L.lanes.forEach((lane, seat) => lane.forEach((p) => put(this.add(new THREE.Mesh(tileGeo, seatMats[seat]!)), p, TILE_TOP / 2, L.armAngles[seat]!)));
@@ -327,8 +333,13 @@ export class BoardScene {
     }
 
     // Shared track and home lanes.
-    const starGeo = flat(starPoints(0.3, 0.13), 0.02, 0.01);
-    const starMat = new THREE.MeshStandardMaterial({ color: 0x8e99b3, roughness: 0.5, metalness: 0.3 });
+    // Safe squares: a large star, and star squares get a gold tile so they still read as safe
+    // when a pawn stands on the star. Start squares keep their seat colour with a white star.
+    // The points reach past a pawn's base (radius about 0.38), so they stay visible under it.
+    const starGeo = flat(starPoints(0.5, 0.22), 0.03, 0.01);
+    const starMat = new THREE.MeshStandardMaterial({ color: 0xb87d0a, roughness: 0.45, metalness: 0.35 });
+    const startStarMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.4 });
+    const safeTile = glossy(0xffd76a, { roughness: 0.4, clearcoat: 0.4 });
     const arrowGeo = flat(
       [
         [-0.28, -0.07],
@@ -347,9 +358,9 @@ export class BoardScene {
       tile.position.copy(toWorld(node, TILE_TOP / 2));
     };
     for (const node of TRACK) {
-      addTile(node, node.start ? seatMats[node.seat!]! : cream);
-      if (node.star) {
-        this.add(new THREE.Mesh(starGeo, starMat), false).position.copy(toWorld(node, TILE_TOP));
+      addTile(node, node.start ? seatMats[node.seat!]! : node.star ? safeTile : cream);
+      if (node.star || node.start) {
+        this.add(new THREE.Mesh(starGeo, node.start ? startStarMat : starMat), false).position.copy(toWorld(node, TILE_TOP));
       }
       if (node.laneEntry) {
         // Arrow points from the entry square into the seat's lane.
@@ -613,6 +624,17 @@ export class BoardScene {
     // Pick the movable pawn nearest the tap, measured on screen. This is far
     // more forgiving for fingers than requiring a hit on the pawn's mesh.
     const rect = this.renderer.domElement.getBoundingClientRect();
+    // First, a tap that lands on a movable pawn picks exactly that pawn. Without this a
+    // tap on a pawn standing on its start square could pick a yard pawn right beside it.
+    const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+    this.raycaster.setFromCamera(ndc, this.camera);
+    const groups = view.movable.map((index) => this.pawns[view.seat]![index]!);
+    const hit = this.raycaster.intersectObjects(groups, true)[0];
+    if (hit) {
+      const index = view.movable.find((i) => groups[view.movable.indexOf(i)]!.children.includes(hit.object));
+      if (index !== undefined) return this.onPawnTap(index);
+    }
+    // Otherwise, forgiving for fingers: the movable pawn nearest the tap, if close enough.
     let best = -1;
     let bestDist = Math.max(34, rect.width * 0.045);
     for (const index of view.movable) {

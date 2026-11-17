@@ -124,3 +124,27 @@ describe('disconnecting', () => {
     expect(room.empty).toBe(false);
   });
 });
+
+describe('two-dice rooms', () => {
+  it('rolls both dice on the server and lets the player pick which die to use', () => {
+    const room = new Room('DICE2', 'classic', seededDice(5), false, 2);
+    room.join(A, 'Alex');
+    room.join(B, 'Emma');
+    room.start(A);
+    expect(room.view().dice).toBe(2);
+    let rolled = room.roll(A).find((e) => e.type === 'rolled');
+    while (!rolled || rolled.type !== 'rolled' || room.view().match!.turn.phase !== 'move') {
+      const m = room.view().match!;
+      const who = m.turn.seat === 0 ? A : B;
+      if (m.turn.phase === 'roll') rolled = room.roll(who).find((e) => e.type === 'rolled');
+      else room.move(who, legalMoves(m)[0]!.pawn, legalMoves(m)[0]!.die);
+    }
+    expect(rolled.value2).toBeGreaterThanOrEqual(1);
+    const m = room.view().match!;
+    const who = m.turn.seat === 0 ? A : B;
+    expect(() => room.move(who, 0, 'six')).toThrow(RoomError);
+    const choice = legalMoves(m).at(-1)!;
+    room.move(who, choice.pawn, choice.die);
+    expect(room.view().match!.version).toBe(m.version + 1);
+  });
+});

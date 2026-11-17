@@ -53,7 +53,7 @@ export interface Connection {
 
 export type ConnectionStatus = 'connecting' | 'reconnecting' | 'connected' | 'failed';
 type Identity = { token: string; name: string; avatar?: number };
-export type Entry = ({ t: 'create' | 'quick'; variant: string } | { t: 'join'; code: string }) & Identity;
+export type Entry = ({ t: 'create' | 'quick'; variant: string; dice?: 1 | 2 } | { t: 'join'; code: string }) & Identity;
 
 /** Rejoin with the same identity, never replaying a roll or move after a drop. */
 export function connect(first: Entry, onMessage: (m: ServerMessage) => void, onStatus: (status: ConnectionStatus) => void, url = serverUrl()): Connection {

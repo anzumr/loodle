@@ -4,6 +4,24 @@ Written 2026-11-16 for the next developer or coding agent. The product spec is t
 
 ## Where things stand
 
+### Optional two dice (2026-11-17, uncommitted, NOT deployed)
+
+- `RulesConfig.dice` (1 or 2). Rules in `docs/RULES.md`; the double and third-double details are my proposal. Engine: `TurnState.die2` and `rollBonus`; roll actions carry `value2`, move actions an optional `die`; `legalMoves(state)` lists moves for every die left, each with its `die`; `diceLeft(state)`. AI: `chooseLegalMove` returns pawn and die (`chooseMove` still returns the pawn).
+- Server: rooms have `diceCount`; `create` and `quick` take `dice`, and Quick Play only matches players who chose the same dice. `move` accepts `die`. The server rolls both dice.
+- Web: Dice 1/2 choice in the mode menu (remembered as `loodl.dice`); two tappable dice in the HUD, spent die greyed; pawns glow for the chosen die.
+- Validation: 210 tests pass (16 new two-dice rules tests, 1 server room test). In a local browser a two-dice Pass & Play match rolled 6 and 5; choosing the 5 moved the tapped pawn 20 → 25 and left the 6 to use. A bug where the HUD showed 6 and 6 after a reload was fixed. Two-dice online play was tested only at the room level, not in a browser.
+- Found while measuring: an 8-player match with four pawns each runs to about 1,100 rolls per player with one die (550 with two), which is far too long to play. Consider defaulting 7-8 player matches to two pawns.
+
+### Owner feedback round (2026-11-17, uncommitted, NOT deployed)
+
+- **Pawn home earns a reroll:** `CLASSIC_RULES.bonusOnFinish` is now `true` (applies to every mode). A player whose last pawn gets home still stops rolling.
+- **Turn timers:** 6 s to roll and 12 s to choose a pawn, then the game acts with the medium AI. Online: `ROLL_TIMEOUT_MS` / `MOVE_TIMEOUT_MS` in `apps/server/src/room.ts` (replaces the 30 s `ACTION_TIMEOUT_MS`). Offline: the same clock for every human seat, including Pass & Play; the HUD shows the countdown. Not applied in the tutorial.
+- **Bot for players who leave:** online, a disconnected or departed player's seat is played after the 1.2 s bot pause instead of waiting for the timer; the seat is theirs again as soon as they rejoin. The HUD says "<name> left — a bot is playing for them".
+- **6 picking the yard pawn:** tap picking now raycasts against movable pawns first and only falls back to "nearest pawn". Previously a tap on a pawn standing on its start square could select a yard pawn beside it. Verified in a browser: with a 6, tapping the pawn on red's start moved it 0 → 6.
+- **Stars:** start squares now carry a white star; star squares have a gold tile and a larger star whose points reach past a pawn's base so the square still reads as safe when occupied. Checked in a browser at 800×600; the board is small at that size, so how well the star reads under a pawn on a phone is not yet confirmed.
+- **"Double dice" — not done:** unclear whether the owner wants two dice per roll (a new rule) or saw two dice on screen. No duplicate die was found during play in the browser.
+- Validation: 193 tests pass (2 new timer tests), typecheck clean.
+
 ### Continuation: Stages 8-10, the parts that need no database or payment provider (2026-11-16, uncommitted, NOT deployed)
 
 **Stage 8 — progression (local).** `packages/rules/src/progression.ts`: XP and levels (`levelFor`, `xpForLevel`), coins, 12 achievements, three daily challenges per day (same for everyone, chosen from the date), `applyMatch(progress, summary, today)` which is idempotent per match id, and `sanitizeProgress` for stored data. Solo matches against the computer pay half of online matches; Pass & Play pays nothing because one person controls every seat. Web: level, coins and XP bar on the lobby chip; reward panel on the results sheet; level, stats, today's challenges and achievements in the profile sheet. Stored in `localStorage` as `loodl.progress`.

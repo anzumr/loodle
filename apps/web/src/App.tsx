@@ -24,6 +24,7 @@ import { Tutorial } from './ui/Tutorial';
 import { AccountPanel, type Account } from './ui/AccountPanel';
 import { play, setSoundEnabled, type Sfx } from './sound';
 import { COSMETICS, buyCosmetic, equipCosmetic, sanitizeWardrobe, type Wardrobe } from '@loodl/rules';
+import { chooseLegalMove, diceLeft } from '@loodl/rules';
 import { ACHIEVEMENTS, AVATAR_COUNT, applyMatch, challengesFor, cleanAvatar, levelFor, sanitizeProgress, validateUsername, type Progress, type Reward } from '@loodl/rules';
 import { AVATAR_NAMES, Avatar } from './ui/Avatar';
 import { connect, playerToken, rememberedRoom, rememberRoom, type Connection, type ConnectionStatus, type RoomView, type ServerMessage } from './net';
@@ -105,18 +106,29 @@ function describe(events: GameEvent[]): string {
   const rolled = find('rolled');
   const over = find('matchOver');
   if (over) return `${seatName(over.order[0]!)} wins!`;
-  if (find('thirdSixForfeit')) return 'Third six in a row — turn ends';
+  if (find('thirdSixForfeit')) return rolled?.value2 !== undefined ? 'Third double in a row — turn ends' : 'Third six in a row — turn ends';
   const done = find('seatFinished');
   if (done) return `${seatName(done.seat)} is home — place ${done.place}`;
   const cap = find('captured');
   if (cap) return `${seatName(cap.by)} captured ${seatName(cap.seat)} — roll again`;
-  if (find('pawnFinished')) return 'Pawn home!';
+  if (find('pawnFinished')) return find('bonusRoll') ? 'Pawn home! Roll again' : 'Pawn home!';
   const none = find('noLegalMove');
   if (none) return none.value === 6 ? 'No move for that six — roll again' : `Rolled ${none.value} — no move`;
-  if (find('bonusRoll')) return 'Six! Roll again';
+  const bonus = find('bonusRoll');
+  if (rolled?.value2 !== undefined) {
+    const both = `${rolled.value} and ${rolled.value2}`;
+    return bonus?.reason === 'double' ? `Double ${both}! Use both, then roll again — tap a pawn` : `Rolled ${both} — tap a pawn`;
+  }
+  if (bonus) return 'Six! Roll again';
   if (rolled) return `Rolled ${rolled.value} — tap a pawn`;
   return '';
 }
+
+/** A computer or timed-out move, including which die to use in two-dice games. */
+const pickMove = (match: MatchState, level: AiLevel) => {
+  const m = chooseLegalMove(match, level, Math.random);
+  return { pawn: m.pawn, die: match.config.dice === 2 ? m.die : undefined };
+};
 
 export function App() {
   const host = useRef<HTMLDivElement>(null);
@@ -131,6 +143,21 @@ export function App() {
   const saved = useMemo(loadSaved, []);
   const [players, setPlayers] = useState(4);
   const [pawnCount, setPawnCount] = useState<2 | 3 | 4>(4);
+  const [diceCount, setDiceCount] = useState<1 | 2>(() => {
+    try {
+      return localStorage.getItem('loodl.dice') === '2' ? 2 : 1;
+    } catch {
+      return 1;
+    }
+  });
+  const chooseDice = (n: 1 | 2) => {
+    setDiceCount(n);
+    try {
+      localStorage.setItem('loodl.dice', String(n));
+    } catch {
+      /* ignore */
+    }
+  };
   const [solo, setSolo] = useState(true);
   const [level, setLevel] = useState<AiLevel>(saved?.level ?? 'medium');
   const [humans, setHumans] = useState<Seat[]>(saved?.humans ?? [0]);
@@ -144,6 +171,9 @@ export function App() {
   const [match, setMatch] = useState<MatchState | null>(saved?.match ?? null);
   const [message, setMessage] = useState('');
   const [face, setFace] = useState(6);
+  const [face2, setFace2] = useState(6);
+  /** Two dice: the die the player has chosen to use next. */
+  const [pickedDie, setPickedDie] = useState<number | null>(null);
   const [rolling, setRolling] = useState(false);
   const [online, setOnline] = useState<{ room: RoomView; you: number } | null>(null);
   const [netStatus, setNetStatus] = useState<ConnectionStatus | 'offline'>('offline');
@@ -227,7 +257,7 @@ export function App() {
   const rewardedMatch = useRef<MatchState | null>(null);
   const countEvents = (events: GameEvent[]) => {
     for (const e of events) {
-      if (e.type === 'rolled' && e.value === 6 && e.seat === mySeat.current) tally.current.sixes++;
+      if (e.type === 'rolled' && e.seat === mySeat.current) tally.current.sixes += (e.value === 6 ? 1 : 0) + (e.value2 === 6 ? 1 : 0);
       if (e.type === 'captured' && e.by === mySeat.current) tally.current.captures++;
     }
   };
@@ -267,7 +297,7 @@ export function App() {
   };
 
   /** Create a room, or join one by code. The server owns the match from here on. */
-  const enterRoom = (first: { t: 'create' | 'quick'; variant: string } | { t: 'join'; code: string }) => {
+  const enterRoom = (first: { t: 'create' | 'quick'; variant: string; dice: 1 | 2 } | { t: 'join'; code: string }) => {
     setNetError('');
     if (!networkSession) offlineMatch.current = match ? { match, humans, level } : null;
     setNetworkSession(true);
@@ -298,7 +328,10 @@ export function App() {
         setSheet(null);
         setScreen('board');
         const rolled = m.events.find((e) => e.type === 'rolled');
-        if (rolled && rolled.type === 'rolled') setFace(rolled.value);
+        if (rolled && rolled.type === 'rolled') {
+          setFace(rolled.value);
+          if (rolled.value2 !== undefined) setFace2(rolled.value2);
+        }
         else if (m.room.match.turn.die !== null) setFace(m.room.match.turn.die);
         countEvents(m.events);
         if (m.room.match.version === 0) tally.current = { captures: 0, sixes: 0 };
@@ -329,15 +362,18 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!networkSession) return;
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, [networkSession]);
+  }, []);
 
   const moves = useMemo(() => (match?.turn.phase === 'move' ? legalMoves(match) : []), [match]);
   // If every legal move starts from the same spot there is nothing to choose.
   const human = !!match && humans.includes(match.turn.seat) && (!networkSession || netStatus === 'connected');
-  const forced = human && moves.length > 0 && moves.every((m) => m.from === moves[0]!.from);
+  const left = match ? diceLeft(match) : [];
+  const twoDice = match?.config.dice === 2;
+  const activeDie = twoDice ? (pickedDie !== null && left.includes(pickedDie) ? pickedDie : (left.find((d) => moves.some((m) => m.die === d)) ?? null)) : null;
+  const shownMoves = activeDie === null ? moves : moves.filter((m) => m.die === activeDie);
+  const forced = human && moves.length > 0 && moves.every((m) => m.from === moves[0]!.from && m.die === moves[0]!.die);
 
   const act = useCallback((state: MatchState, action: Parameters<typeof applyAction>[1]) => {
     const result = applyAction(state, action);
@@ -352,10 +388,14 @@ export function App() {
     (pawn: number) => {
       if (!human) return;
       if (match?.turn.phase !== 'move' || !moves.some((m) => m.pawn === pawn)) return;
-      if (online) conn.current?.send({ t: 'move', pawn });
-      else act(match, { type: 'move', seat: match.turn.seat, pawn });
+      // Use the chosen die if this pawn can; otherwise whichever die it can use.
+      const choice = moves.find((m) => m.pawn === pawn && m.die === activeDie) ?? moves.find((m) => m.pawn === pawn)!;
+      const die = match.config.dice === 2 ? choice.die : undefined;
+      setPickedDie(null);
+      if (online) conn.current?.send({ t: 'move', pawn, die });
+      else act(match, { type: 'move', seat: match.turn.seat, pawn, die });
     },
-    [match, moves, act, online, human],
+    [match, moves, act, online, human, activeDie],
   );
 
   const roll = () => {
@@ -366,10 +406,13 @@ export function App() {
     setMessage('');
     play('roll');
     const value = rollDie();
+    const value2 = match.config.dice === 2 ? rollDie() : undefined;
     window.setTimeout(() => {
       setFace(value);
+      if (value2 !== undefined) setFace2(value2);
+      setPickedDie(null);
       setRolling(false);
-      act(match, { type: 'roll', seat: match.turn.seat, value });
+      act(match, { type: 'roll', seat: match.turn.seat, value, value2 });
     }, 520);
   };
 
@@ -395,7 +438,7 @@ export function App() {
     const showing = screen === 'board' && match;
     scene.current?.setView(
       showing
-        ? { pawns: match.pawns, seat: match.turn.seat, movable: forced || !human ? [] : moves.map((m) => m.pawn), boardSeats: match.config.boardSeats }
+        ? { pawns: match.pawns, seat: match.turn.seat, movable: forced || !human ? [] : shownMoves.map((m) => m.pawn), boardSeats: match.config.boardSeats }
         : null,
     );
   }, [screen, match, moves, forced, human, tutorial]);
@@ -406,12 +449,32 @@ export function App() {
     return () => window.clearTimeout(id);
   }, [forced, moves, move, screen]);
 
+  // People get 6 seconds to roll and 12 to choose a pawn, then the game plays for them.
+  // Online, the server keeps the same clock and acts itself.
+  const [localDeadline, setLocalDeadline] = useState<number | null>(null);
+  useEffect(() => {
+    if (networkSession || !match || screen !== 'board' || match.turn.phase === 'over' || !human || rolling || forced) {
+      setLocalDeadline(null);
+      return;
+    }
+    const wait = match.turn.phase === 'roll' ? 6_000 : 12_000;
+    setLocalDeadline(Date.now() + wait);
+    const seat = match.turn.seat;
+    const id = window.setTimeout(
+      () => (match.turn.phase === 'roll' ? roll() : act(match, { type: 'move', seat, ...pickMove(match, 'medium') })),
+      wait,
+    );
+    return () => window.clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [match, screen, human, rolling, forced, networkSession]);
+  const deadline = online?.room.actionDeadline ?? localDeadline;
+
   // Computer players: roll, then choose a move. They only pick among legal moves.
   useEffect(() => {
     if (networkSession || !match || screen !== 'board' || match.turn.phase === 'over' || human || rolling) return;
     const seat = match.turn.seat;
     const id = window.setTimeout(
-      () => (match.turn.phase === 'roll' ? roll() : act(match, { type: 'move', seat, pawn: chooseMove(match, level, Math.random) })),
+      () => (match.turn.phase === 'roll' ? roll() : act(match, { type: 'move', seat, ...pickMove(match, level) })),
       match.turn.phase === 'roll' ? 1000 : 700,
     );
     return () => window.clearTimeout(id);
@@ -452,7 +515,7 @@ export function App() {
   }, [quality, tutorial]);
 
   const startMatch = () => {
-    const fresh = createMatch({ players, config: { ...VARIANTS[variant].rules, pawnsPerPlayer: pawnCount } });
+    const fresh = createMatch({ players, config: { ...VARIANTS[variant].rules, pawnsPerPlayer: pawnCount, dice: diceCount } });
     tally.current = { captures: 0, sixes: 0 };
     setReward(null);
     setHumans(solo ? [fresh.seats[0]!] : fresh.seats);
@@ -498,6 +561,20 @@ export function App() {
         /* storage unavailable: progress lasts for this visit only */
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [match]);
+
+  // Show the dice the match is actually waiting on, including after a reload or rejoin.
+  useEffect(() => {
+    const t = match?.turn;
+    if (!t || t.phase !== 'move' || t.die === null) return;
+    if (typeof t.die2 === 'number') {
+      setFace(t.die);
+      setFace2(t.die2);
+    } else if (match.config.dice === 2) {
+      // One die left: keep showing both faces unless neither matches (e.g. after a reload).
+      if (face !== t.die && face2 !== t.die) setFace(t.die);
+    } else setFace(t.die);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [match]);
 
@@ -595,13 +672,46 @@ export function App() {
 
           {!over && (
             <footer className="board-foot">
-              {online?.room.actionDeadline && <small role="status">{Math.max(0, Math.ceil((online.room.actionDeadline - now) / 1000))}s · server plays automatically when time runs out</small>}
+              {deadline && human && (
+                <small role="status" className="turn-timer">
+                  {Math.max(0, Math.ceil((deadline - now) / 1000))}s to {turn.phase === 'roll' ? 'roll' : 'move'} · then it plays automatically
+                </small>
+              )}
               <div className="readout" aria-live="polite">
                 {networkSession && netStatus !== 'connected' ? 'Connection lost — reconnecting…' : (forced || !human ? message.replace(' — tap a pawn', '') : message) ||
-                  (!human ? (online ? `Waiting for ${rival(turn.seat)}…` : `${RIVALS[level]} is playing…`) : turn.phase === 'roll' ? 'Roll the die' : 'Tap a pawn')}
+                  (!human ? (online ? (online.room.players.find((pl) => pl.seat === turn.seat)?.connected === false ? `${rival(turn.seat)} left — a bot is playing for them` : `Waiting for ${rival(turn.seat)}…`) : `${RIVALS[level]} is playing…`) : turn.phase === 'roll' ? 'Roll the die' : 'Tap a pawn')}
               </div>
               <div className="roll-row">
-                <Die value={face} rolling={rolling} skin={wardrobe.equipped.dice} />
+                {twoDice ? (
+                  <div className="dice-pair" role="group" aria-label="Dice — tap one to choose which to use">
+                    {[face, face2].map((value, i) => {
+                      // Match each die face to a die still waiting to be used; the rest are spent.
+                      const waiting = [...left];
+                      const spent = [face, face2].map((v) => {
+                        const k = waiting.indexOf(v);
+                        if (k < 0) return true;
+                        waiting.splice(k, 1);
+                        return false;
+                      });
+                      const used = turn.phase === 'move' && !rolling && spent[i]!;
+                      const firstMatch = [face, face2].findIndex((v, j) => v === activeDie && !spent[j]);
+                      const chosen = turn.phase === 'move' && !rolling && !used && firstMatch === i;
+                      return (
+                        <button
+                          key={i}
+                          className={`die-btn ${used ? 'used' : ''} ${chosen ? 'chosen' : ''}`}
+                          disabled={!human || turn.phase !== 'move' || used || rolling}
+                          aria-pressed={chosen}
+                          onClick={() => setPickedDie(value)}
+                        >
+                          <Die value={value} rolling={rolling} skin={wardrobe.equipped.dice} />
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <Die value={face} rolling={rolling} skin={wardrobe.equipped.dice} />
+                )}
                 <button className="play-btn roll-btn" onClick={roll} disabled={!human || turn.phase !== 'roll' || rolling}>
                   ROLL
                 </button>
@@ -725,6 +835,19 @@ export function App() {
               ))}
             </div>
           </div>
+          <div className="setting">
+            <span>
+              <strong>Dice</strong>
+              <small>{diceCount === 2 ? 'Use each die on any pawn · doubles roll again' : 'One die per roll'}</small>
+            </span>
+            <div className="segmented" role="group" aria-label="Dice per roll">
+              {([1, 2] as const).map((n) => (
+                <button key={n} className={diceCount === n ? 'on' : ''} aria-pressed={diceCount === n} onClick={() => chooseDice(n)}>
+                  {n}
+                </button>
+              ))}
+            </div>
+          </div>
           {solo && (
             <div className="setting stacked">
               <span>
@@ -769,7 +892,7 @@ export function App() {
             </span>
             <Chevron />
           </button>
-          <button className="mode" onClick={() => enterRoom({ t: 'quick', variant })}>
+          <button className="mode" onClick={() => enterRoom({ t: 'quick', variant, dice: diceCount })}>
             <span>
               <strong>Quick Play</strong>
               <small>Online match with whoever is around · {variant === 'classic' ? 'Classic' : `Quick ${VARIANTS[variant].label}`}</small>
@@ -803,7 +926,7 @@ export function App() {
                 </span>
                 <input value={name} maxLength={16} placeholder="Guest" aria-invalid={!!name && !nameCheck.ok} onChange={(e) => rename(e.target.value)} />
               </label>
-              <button className="mode on" onClick={() => enterRoom({ t: 'create', variant })}>
+              <button className="mode on" onClick={() => enterRoom({ t: 'create', variant, dice: diceCount })}>
                 <span>
                   <strong>Create a room</strong>
                   <small>{variant === 'classic' ? 'Classic Ludo' : `Quick ${VARIANTS[variant].label}`} · you get a code to share</small>
@@ -831,13 +954,13 @@ export function App() {
                     {online.room.startsAt ? `Starting in ${Math.max(0, Math.ceil((online.room.startsAt - now) / 1000))}s` : 'Finding players…'}
                   </strong>
                   <small>If nobody else joins within 15 seconds, computer players (marked Bot) fill the seats.</small>
-                  <small>30 seconds per roll or move, then automatic play</small>
+                  <small>6 seconds to roll, 12 to move, then automatic play</small>
                 </div>
               ) : (
                 <div className="setting stacked room-code">
                   <small>Share this code</small>
                   <strong>{online.room.code}</strong>
-                  <small>30 seconds per roll or move, then automatic play</small>
+                  <small>6 seconds to roll, 12 to move, then automatic play</small>
                 </div>
               )}
               {online.room.players.map((pl, i) => (

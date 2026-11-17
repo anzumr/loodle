@@ -11,7 +11,7 @@ import {
   applyAction,
   cleanAvatar,
   cleanUsername,
-  chooseMove,
+  chooseLegalMove,
   createMatch,
   defaultSeats,
   type Dice,
@@ -23,7 +23,11 @@ import {
 export const VARIANTS = { classic: CLASSIC_RULES, race: QUICK_RACE_RULES, clash: QUICK_CLASH_RULES } as const;
 export type Variant = keyof typeof VARIANTS;
 export const MAX_PLAYERS = 4;
-export const ACTION_TIMEOUT_MS = 30_000;
+/** Time a player has to roll before the server rolls for them. */
+export const ROLL_TIMEOUT_MS = 6_000;
+/** Time a player has to choose a pawn before the server moves for them. */
+export const MOVE_TIMEOUT_MS = 12_000;
+const timeoutFor = (match: MatchState) => (match.turn.phase === 'roll' ? ROLL_TIMEOUT_MS : MOVE_TIMEOUT_MS);
 /** Quick Play: countdown once two players are in, so others can still join. */
 export const PUBLIC_START_DELAY_MS = 8_000;
 /** Quick Play: how long to look for people before computer players fill the empty seats. */
@@ -50,6 +54,8 @@ interface Player {
 export interface RoomView {
   code: string;
   variant: Variant;
+  /** Dice per roll in this room's matches. */
+  dice: 1 | 2;
   /** Index into `players` of the host. */
   host: number;
   players: { name: string; avatar: number; seat: Seat | null; connected: boolean; bot: boolean }[];
@@ -79,6 +85,7 @@ export class Room {
     readonly variant: Variant,
     private dice: Dice,
     readonly isPublic = false,
+    readonly diceCount: 1 | 2 = 1,
   ) {}
 
   private find(token: string): Player {
@@ -171,8 +178,8 @@ export class Room {
     this.startsAt = null;
     const seats = defaultSeats(this.players.length);
     this.players.forEach((p, i) => (p.seat = seats[i]!));
-    this.match = createMatch({ seats, config: VARIANTS[this.variant] });
-    this.actionDeadline = Date.now() + ACTION_TIMEOUT_MS;
+    this.match = createMatch({ seats, config: { ...VARIANTS[this.variant], dice: this.diceCount } });
+    this.actionDeadline = Date.now() + timeoutFor(this.match);
     this.botAt = Date.now() + BOT_DELAY_MS;
   }
 
@@ -186,19 +193,25 @@ export class Room {
   /** The server rolls. The client never supplies a value. */
   roll(token: string): GameEvent[] {
     const { match, seat } = this.turnOf(token);
-    return this.apply(applyAction(match, { type: 'roll', seat, value: this.dice.roll() }));
+    return this.apply(applyAction(match, this.rollFor(seat)));
   }
 
-  move(token: string, pawn: unknown): GameEvent[] {
+  /** The server rolls every die itself. */
+  private rollFor(seat: Seat) {
+    return { type: 'roll' as const, seat, value: this.dice.roll(), value2: this.diceCount === 2 ? this.dice.roll() : undefined };
+  }
+
+  move(token: string, pawn: unknown, die?: unknown): GameEvent[] {
     const { match, seat } = this.turnOf(token);
     if (typeof pawn !== 'number' || !Number.isInteger(pawn)) throw new RoomError('Invalid pawn');
-    return this.apply(applyAction(match, { type: 'move', seat, pawn }));
+    if (die !== undefined && (typeof die !== 'number' || !Number.isInteger(die))) throw new RoomError('Invalid die');
+    return this.apply(applyAction(match, { type: 'move', seat, pawn, die: die as number | undefined }));
   }
 
   private apply(result: { state: MatchState; events: GameEvent[] }): GameEvent[] {
     this.touched = Date.now();
     this.match = result.state;
-    this.actionDeadline = this.match.turn.phase === 'over' ? null : Date.now() + ACTION_TIMEOUT_MS;
+    this.actionDeadline = this.match.turn.phase === 'over' ? null : Date.now() + timeoutFor(this.match);
     this.botAt = Date.now() + BOT_DELAY_MS;
     return result.events;
   }
@@ -207,12 +220,16 @@ export class Room {
   tick(now = Date.now()): GameEvent[] {
     if (this.empty || !this.match || this.actionDeadline === null) return [];
     const seat = this.match.turn.seat;
-    // Bots act after a short pause; people get the full time limit before the server plays for them.
-    const bot = this.players.some((p) => p.bot && p.seat === seat);
+    // Bots, and players who have left (a bot takes their seat until they return), act after a
+    // short pause. People at the table get the full time limit before the server plays for them.
+    const bot = this.players.some((p) => p.seat === seat && (p.bot || !p.connected));
     if (now < (bot ? this.botAt : this.actionDeadline)) return [];
     return this.apply(applyAction(this.match, this.match.turn.phase === 'roll'
-      ? { type: 'roll', seat, value: this.dice.roll() }
-      : { type: 'move', seat, pawn: chooseMove(this.match, 'medium', () => 0.5) }));
+      ? this.rollFor(seat)
+      : (() => {
+          const m = chooseLegalMove(this.match!, 'medium', () => 0.5);
+          return { type: 'move' as const, seat, pawn: m.pawn, die: m.die };
+        })()));
   }
 
   get empty(): boolean {
@@ -223,6 +240,7 @@ export class Room {
     return {
       code: this.code,
       variant: this.variant,
+      dice: this.diceCount,
       host: 0,
       players: this.players.map(({ name, avatar, seat, connected, bot }) => ({ name, avatar, seat, connected, bot })),
       match: this.match,

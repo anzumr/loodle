@@ -104,11 +104,14 @@ function score(state: MatchState, move: LegalMove, w: Weights): number {
 }
 
 /** Pick a pawn to move for the seat whose turn it is. The match must be in the move phase. */
-export function chooseMove(state: MatchState, level: AiLevel, random: Random): number {
+export const chooseMove = (state: MatchState, level: AiLevel, random: Random): number => chooseLegalMove(state, level, random).pawn;
+
+/** Pick a whole move (pawn and, in two-dice games, which die) for the seat whose turn it is. */
+export function chooseLegalMove(state: MatchState, level: AiLevel, random: Random): LegalMove {
   const moves = legalMoves(state);
   if (moves.length === 0) throw new Error('No legal move to choose from');
   const w = LEVELS[level];
-  const pickFrom = (list: LegalMove[]) => list[Math.floor(random() * list.length)]!.pawn;
+  const pickFrom = (list: LegalMove[]) => list[Math.floor(random() * list.length)]!;
   if (random() < w.blunder) return pickFrom(moves);
   const scored = moves.map((m) => ({ m, s: score(state, m, w) }));
   const best = Math.max(...scored.map((x) => x.s));

@@ -41,13 +41,19 @@ export interface RulesConfig {
   targetScore: number | null;
   capturePoints: number;
   homePoints: number;
+  /**
+   * Dice per roll. With 2, each die is used separately (on the same pawn or different
+   * ones, in either order); a double earns another roll, and a third double in a row
+   * ends the turn, mirroring the locked three-sixes rule of the one-die game.
+   */
+  dice: 1 | 2;
 }
 
 export const CLASSIC_RULES: RulesConfig = {
   pawnsPerPlayer: 4,
   bonusOnSix: true,
   bonusOnCapture: true,
-  bonusOnFinish: false,
+  bonusOnFinish: true,
   stackBonuses: false,
   blockades: true,
   boardSeats: 4,
@@ -57,6 +63,7 @@ export const CLASSIC_RULES: RulesConfig = {
   targetScore: null,
   capturePoints: 0,
   homePoints: 0,
+  dice: 1,
 };
 
 /** Quick Race: one pawn already out; the first seat to bring two pawns home wins. */
@@ -84,7 +91,11 @@ export interface TurnState {
   phase: Phase;
   /** The die waiting to be used (move phase only). */
   die: number | null;
-  /** Consecutive sixes rolled so far in this turn (0–2). */
+  /** Two-dice games: the other die, still waiting to be used. */
+  die2?: number | null;
+  /** Two-dice games: extra rolls earned by the current roll so far. */
+  rollBonus?: number;
+  /** Consecutive sixes (one die) or doubles (two dice) rolled so far in this turn (0–2). */
   sixes: number;
   /** Extra rolls already earned but not yet taken (only with stackBonuses). */
   pendingBonus: number;
@@ -105,7 +116,9 @@ export interface MatchState {
   version: number;
 }
 
-export type Action = { type: 'roll'; seat: Seat; value: number } | { type: 'move'; seat: Seat; pawn: number };
+export type Action =
+  | { type: 'roll'; seat: Seat; value: number; /** Second die, two-dice games only. */ value2?: number }
+  | { type: 'move'; seat: Seat; pawn: number; /** Which die to use, two-dice games only. Defaults to the first that works. */ die?: number };
 
 export interface PawnRef {
   seat: Seat;
@@ -118,10 +131,12 @@ export interface LegalMove {
   to: number;
   captures: PawnRef[];
   finishes: boolean;
+  /** The die value this move uses. */
+  die: number;
 }
 
 export type GameEvent =
-  | { type: 'rolled'; seat: Seat; value: number }
+  | { type: 'rolled'; seat: Seat; value: number; value2?: number }
   | { type: 'thirdSixForfeit'; seat: Seat }
   | { type: 'noLegalMove'; seat: Seat; value: number }
   | { type: 'moved'; seat: Seat; pawn: number; from: number; to: number }
@@ -129,7 +144,7 @@ export type GameEvent =
   | { type: 'pawnFinished'; seat: Seat; pawn: number }
   | { type: 'scored'; seat: Seat; points: number; total: number }
   | { type: 'seatFinished'; seat: Seat; place: number }
-  | { type: 'bonusRoll'; seat: Seat; reason: 'six' | 'capture' | 'finish' }
+  | { type: 'bonusRoll'; seat: Seat; reason: 'six' | 'double' | 'capture' | 'finish' }
   | { type: 'turnPassed'; seat: Seat }
   | { type: 'matchOver'; order: Seat[] };
 
@@ -167,6 +182,8 @@ export function createMatch(options: { players?: number; seats?: Seat[]; config?
     throw new RuleError('Seats must be 2 or more distinct seats that exist on the board');
   const boardIndexes = Array.from({ length: boardSeats }, (_, i) => i as Seat);
   if (![2, 3, 4].includes(config.pawnsPerPlayer)) throw new RuleError('Pawns per player must be 2, 3 or 4');
+  config.dice ??= 1;
+  if (config.dice !== 1 && config.dice !== 2) throw new RuleError('Matches use one or two dice');
   const whole = (n: number, min: number, max: number) => Number.isInteger(n) && n >= min && n <= max;
   if (!whole(config.startOnBoard, 0, config.pawnsPerPlayer)) throw new RuleError('Invalid number of pawns starting on the board');
   if (config.pawnsToWin !== null && !whole(config.pawnsToWin, 1, config.pawnsPerPlayer)) throw new RuleError('Invalid pawns needed to win');
@@ -203,8 +220,19 @@ const opponentsOf = (state: MatchState, seat: Seat) => state.seats.filter((s) =>
 const blockadeAt = (state: MatchState, mover: Seat, trackIndex: number): boolean =>
   state.config.blockades && opponentsOf(state, mover).some((s) => pawnsOn(state, s, trackIndex).length >= 2);
 
-/** Every move the given die allows the seat whose turn it is. */
-export function legalMoves(state: MatchState, die: number | null = state.turn.die): LegalMove[] {
+/** Dice still waiting to be used this roll. */
+export const diceLeft = (state: MatchState): number[] =>
+  state.turn.phase !== 'move' ? [] : [state.turn.die, state.turn.die2].filter((d): d is number => typeof d === 'number');
+
+/**
+ * Every move the seat whose turn it is can make. With no die given, that is every
+ * move for every die still waiting to be used (one or two).
+ */
+export function legalMoves(state: MatchState, die?: number | null): LegalMove[] {
+  if (die === undefined) {
+    const left = [...new Set(diceLeft(state))];
+    return left.flatMap((d) => legalMoves(state, d));
+  }
   if (die === null || state.turn.phase === 'over') return [];
   const seat = state.turn.seat;
   const moves: LegalMove[] = [];
@@ -224,7 +252,7 @@ export function legalMoves(state: MatchState, die: number | null = state.turn.di
       landing === null || isSafeTrackIndex(landing)
         ? []
         : opponentsOf(state, seat).flatMap((s) => pawnsOn(state, s, landing).map((p) => ({ seat: s, pawn: p })));
-    moves.push({ pawn, from, to, captures, finishes: to === finish });
+    moves.push({ pawn, from, to, captures, finishes: to === finish, die });
   });
   return moves;
 }
@@ -249,13 +277,17 @@ function passTurn(state: MatchState, events: GameEvent[]) {
     next = order[i]!;
   } while (!remaining.includes(next));
   state.turn = { seat: next, phase: 'roll', die: null, sixes: 0, pendingBonus: 0 };
+  if (state.config.dice === 2) Object.assign(state.turn, { die2: null, rollBonus: 0 });
   events.push({ type: 'turnPassed', seat: next });
 }
 
 /** After a roll is fully resolved: take an earned extra roll, or pass the turn. */
 function continueOrPass(state: MatchState, earned: number, events: GameEvent[]) {
   const total = state.turn.pendingBonus + earned;
-  if (total > 0) state.turn = { ...state.turn, phase: 'roll', die: null, pendingBonus: total - 1 };
+  if (total > 0) {
+    state.turn = { ...state.turn, phase: 'roll', die: null, pendingBonus: total - 1 };
+    if (state.config.dice === 2) Object.assign(state.turn, { die2: null, rollBonus: 0 });
+  }
   else passTurn(state, events);
 }
 
@@ -281,11 +313,51 @@ function applyRoll(state: MatchState, value: number, events: GameEvent[]) {
   state.turn.die = value;
 }
 
-function applyMove(state: MatchState, pawn: number, events: GameEvent[]) {
+/** Two dice: both values are kept and used one at a time. */
+function applyRoll2(state: MatchState, a: number, b: number, events: GameEvent[]) {
   const seat = state.turn.seat;
-  const die = state.turn.die!;
-  const move = legalMoves(state).find((m) => m.pawn === pawn);
+  events.push({ type: 'rolled', seat, value: a, value2: b });
+  const double = a === b;
+  const streak = double ? state.turn.sixes + 1 : 0;
+  if (streak === SIX_LIMIT) {
+    // Third double in a row: no move with it, earlier moves stand, turn ends.
+    events.push({ type: 'thirdSixForfeit', seat });
+    passTurn(state, events);
+    return;
+  }
+  const bonus = double && state.config.bonusOnSix ? 1 : 0;
+  if (bonus) events.push({ type: 'bonusRoll', seat, reason: 'double' });
+  state.turn = { ...state.turn, phase: 'move', die: a, die2: b, sixes: streak, rollBonus: bonus };
+  settleDice(state, events);
+}
+
+/**
+ * Two dice: the roll ends once no remaining die can be used. A die that cannot be used
+ * yet is kept while the other can still move, because that move may open it up (a six
+ * that brings a pawn out lets the other die move it).
+ */
+function settleDice(state: MatchState, events: GameEvent[]) {
+  const seat = state.turn.seat;
+  const left = diceLeft(state);
+  if (left.some((d) => legalMoves(state, d).length > 0)) return;
+  for (const d of left) events.push({ type: 'noLegalMove', seat, value: d });
+  state.turn = { ...state.turn, die: null, die2: null };
+  continueOrPass(state, state.turn.rollBonus ?? 0, events);
+}
+
+function useDie(state: MatchState, value: number) {
+  if (state.turn.die === value) state.turn = { ...state.turn, die: state.turn.die2 ?? null, die2: null };
+  else if (state.turn.die2 === value) state.turn = { ...state.turn, die2: null };
+}
+
+function applyMove(state: MatchState, pawn: number, events: GameEvent[], chosen?: number) {
+  const seat = state.turn.seat;
+  const left = diceLeft(state);
+  if (chosen !== undefined && !left.includes(chosen)) throw new RuleError('That die has already been used');
+  const options = legalMoves(state).filter((m) => m.pawn === pawn && (chosen === undefined || m.die === chosen));
+  const move = options[0];
   if (!move) throw new RuleError('That pawn cannot move with this roll');
+  const die = move.die;
   state.pawns[seat]![pawn] = move.to;
   events.push({ type: 'moved', seat, pawn, from: move.from, to: move.to });
   for (const c of move.captures) {
@@ -335,6 +407,18 @@ function applyMove(state: MatchState, pawn: number, events: GameEvent[]) {
 
   const { bonusOnSix, bonusOnCapture, bonusOnFinish, stackBonuses } = state.config;
   const reasons: ('six' | 'capture' | 'finish')[] = [];
+  if (state.config.dice === 2) {
+    // The double bonus was decided at the roll; moves can add capture and home bonuses.
+    if (move.captures.length > 0 && bonusOnCapture) reasons.push('capture');
+    if (move.finishes && bonusOnFinish) reasons.push('finish');
+    const have = state.turn.rollBonus ?? 0;
+    const add = stackBonuses ? reasons.length : have > 0 ? 0 : Math.min(1, reasons.length);
+    for (const reason of reasons.slice(0, add)) events.push({ type: 'bonusRoll', seat, reason });
+    state.turn.rollBonus = have + add;
+    useDie(state, die);
+    settleDice(state, events);
+    return;
+  }
   if (die === 6 && bonusOnSix) reasons.push('six');
   if (move.captures.length > 0 && bonusOnCapture) reasons.push('capture');
   if (move.finishes && bonusOnFinish) reasons.push('finish');
@@ -351,11 +435,15 @@ export function applyAction(prev: MatchState, action: Action): { state: MatchSta
   const events: GameEvent[] = [];
   if (action.type === 'roll') {
     if (prev.turn.phase !== 'roll') throw new RuleError('A pawn must be moved before rolling again');
-    if (!Number.isInteger(action.value) || action.value < 1 || action.value > 6) throw new RuleError('Die must be 1 to 6');
-    applyRoll(state, action.value, events);
+    const face = (n: unknown) => typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= 6;
+    if (!face(action.value)) throw new RuleError('Die must be 1 to 6');
+    if (state.config.dice === 2) {
+      if (!face(action.value2)) throw new RuleError('This game rolls two dice');
+      applyRoll2(state, action.value, action.value2!, events);
+    } else applyRoll(state, action.value, events);
   } else if (action.type === 'move') {
     if (prev.turn.phase !== 'move') throw new RuleError('Roll the die first');
-    applyMove(state, action.pawn, events);
+    applyMove(state, action.pawn, events, action.die);
   } else throw new RuleError('Unknown action');
   state.version = prev.version + 1;
   return { state, events };
@@ -406,6 +494,8 @@ export function deserializeMatch(json: string): MatchState {
   if (!s.seats.includes(t.seat) || !['roll', 'move', 'over'].includes(t.phase)) fail('turn');
   if ((t.phase === 'move') !== (t.die !== null)) fail('die');
   if (t.die !== null && (!Number.isInteger(t.die) || t.die < 1 || t.die > 6)) fail('die value');
+  if (t.die2 !== undefined && t.die2 !== null && (!Number.isInteger(t.die2) || t.die2 < 1 || t.die2 > 6 || t.die === null)) fail('second die');
+  if (t.rollBonus !== undefined && (!Number.isInteger(t.rollBonus) || t.rollBonus < 0)) fail('roll bonus');
   if (!Number.isInteger(t.sixes) || t.sixes < 0 || t.sixes >= SIX_LIMIT) fail('six streak');
   if (!Number.isInteger(t.pendingBonus) || t.pendingBonus < 0) fail('bonus');
   if (!Array.isArray(s.finishOrder) || s.finishOrder.some((x) => !s.seats.includes(x))) fail('finish order');

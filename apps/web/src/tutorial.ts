@@ -17,7 +17,7 @@ export const LESSONS: readonly Lesson[] = [
   { title: 'Safe squares', instruction: 'Roll a three and join yellow on the star square.', outcome: 'Both pawns stay on the star. Stars and coloured start squares protect pawns from capture.', dice: [3], red: [5, -1, -1, -1], yellow: [34, -1, -1, -1] },
   { title: 'Blocked path', instruction: 'Two yellow pawns block your path. Roll a three to see what happens.', outcome: 'You cannot pass or land on an opposing pair. With no legal move, your turn passes.', dice: [3], red: [2, -1, -1, -1], yellow: [30, 30, -1, -1] },
   { title: 'Exact number needed', instruction: 'Your pawn is one square from home. Try rolling a two.', outcome: 'That roll would overshoot home, so the pawn cannot move. You need exactly one.', dice: [2], red: [55, -1, -1, -1] },
-  { title: 'Bring a pawn home', instruction: 'Roll a two and move up your red lane into the centre.', outcome: 'One pawn is home! In Classic, bring all four home to finish.', dice: [2], red: [54, -1, -1, -1] },
+  { title: 'Bring a pawn home', instruction: 'Roll a two and move up your red lane into the centre.', outcome: 'One pawn is home, and that earns you another roll. In Classic, bring all four home to finish.', dice: [2], red: [54, -1, -1, -1] },
   { title: 'Three sixes', instruction: 'Roll and move after each of the first two sixes, then roll once more.', outcome: 'The third six ends your turn immediately. Your first two moves still stand.', dice: [6, 6, 6] },
 ];
 

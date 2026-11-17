@@ -239,12 +239,12 @@ describe('finishing', () => {
     const done = play(s, 3, 'm0');
     expect(done.state.pawns[0]![0]).toBe(FINISH_STEP);
     expect(types(done.events)).toContain('pawnFinished');
-    expect(done.state.turn.seat).toBe(1); // no finish bonus by default
+    expect(done.state.turn).toMatchObject({ seat: 0, phase: 'roll' }); // a pawn home earns another roll
   });
 
-  it('can grant a roll for finishing a pawn when configured', () => {
-    const { state } = play(setup({ 0: [53, YARD, YARD, YARD] }, { config: { bonusOnFinish: true } }), 3, 'm0');
-    expect(state.turn).toMatchObject({ seat: 0, phase: 'roll' });
+  it('can switch off the extra roll for bringing a pawn home', () => {
+    const { state } = play(setup({ 0: [53, YARD, YARD, YARD] }, { config: { bonusOnFinish: false } }), 3, 'm0');
+    expect(state.turn).toMatchObject({ seat: 1, phase: 'roll' });
   });
 
   it('turns into the home lane instead of circling again', () => {

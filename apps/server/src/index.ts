@@ -5,7 +5,7 @@
  * player in the room the full room view, which keeps clients simple and makes
  * reconnecting trivial: rejoin with the same token and you get the current state.
  *
- * Client → server:  create {token,name,variant} | join {token,name,code} | quick {token,name,variant}
+ * Client → server:  create {token,name,variant,dice} | join {token,name,code} | quick {token,name,variant,dice}
  *                    | start | roll | move {pawn} | rematch | leave
  * Server → client:  room {room, you, events} | error {message}
  */
@@ -66,10 +66,11 @@ function handle(socket: WebSocket, msg: Record<string, unknown>, request: Incomi
     let room: Room | undefined;
     const variant = (typeof msg.variant === 'string' && Object.hasOwn(VARIANTS, msg.variant) ? msg.variant : 'classic') as Variant;
     // Quick Play: join an open public room for this mode if there is one, otherwise open a new one.
-    if (msg.t === 'quick') room = [...rooms.values()].find((r) => r.joinable && r.variant === variant && r.indexOf(token) < 0);
+    const diceCount: 1 | 2 = msg.dice === 2 ? 2 : 1;
+    if (msg.t === 'quick') room = [...rooms.values()].find((r) => r.joinable && r.variant === variant && r.diceCount === diceCount && r.indexOf(token) < 0);
     if (msg.t === 'create' || (msg.t === 'quick' && !room)) {
       if (rooms.size >= 500) throw new RoomError('Server is full. Please try again later.');
-      room = new Room(newCode(), variant, dice, msg.t === 'quick');
+      room = new Room(newCode(), variant, dice, msg.t === 'quick', diceCount);
       rooms.set(room.code, room);
     } else if (msg.t === 'join') {
       room = rooms.get(String(msg.code ?? '').toUpperCase().trim());
@@ -84,7 +85,7 @@ function handle(socket: WebSocket, msg: Record<string, unknown>, request: Incomi
   const { room, token } = session;
   if (msg.t === 'start') return room.start(token), broadcast(room);
   if (msg.t === 'roll') return broadcast(room, room.roll(token));
-  if (msg.t === 'move') return broadcast(room, room.move(token, msg.pawn));
+  if (msg.t === 'move') return broadcast(room, room.move(token, msg.pawn, msg.die));
   if (msg.t === 'rematch') return room.rematch(token), broadcast(room);
   if (msg.t === 'leave') return leave(socket);
   throw new RoomError('Unknown message');
