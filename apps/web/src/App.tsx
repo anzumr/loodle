@@ -136,7 +136,7 @@ export function App() {
   const [screen, setScreen] = useState<Screen>('lobby');
   const [tutorial, setTutorial] = useState(false);
   const [view, setView] = useState<View>('angled');
-  const [sheet, setSheet] = useState<'play' | 'settings' | 'help' | 'friends' | 'account' | 'collection' | null>(null);
+  const [sheet, setSheet] = useState<'play' | 'settings' | 'help' | 'friends' | 'account' | 'collection' | 'leave' | null>(null);
   const [account, setAccount] = useState<Account | null>(null);
   const [variant, setVariant] = useState<Variant>('classic');
   const [quality, setQuality] = useState<Quality>(loadQuality);
@@ -469,17 +469,71 @@ export function App() {
   }, [match, screen, human, rolling, forced, networkSession]);
   const deadline = online?.room.actionDeadline ?? localDeadline;
 
+  // Auto roll: when it's your turn to roll, the dice roll for you after a short pause.
+  // Choosing a pawn stays with you. Paused while a menu is open.
+  const [autoRoll, setAutoRoll] = useState(() => {
+    try {
+      return localStorage.getItem('loodl.autoroll') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const toggleAutoRoll = () => {
+    setAutoRoll((on) => {
+      try {
+        localStorage.setItem('loodl.autoroll', on ? '0' : '1');
+      } catch {
+        /* ignore */
+      }
+      return !on;
+    });
+  };
+  useEffect(() => {
+    if (!autoRoll || !match || screen !== 'board' || sheet !== null || !human || rolling || match.turn.phase !== 'roll') return;
+    const id = window.setTimeout(roll, 700);
+    return () => window.clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRoll, match, screen, sheet, human, rolling]);
+
+  // Skip to end: once every human is home in a match against the computer, the
+  // remaining computer turns can be fast-forwarded (quick, silent, no roll animation).
+  const [skipping, setSkipping] = useState(false);
+  const humansDone =
+    !networkSession && !!match && match.turn.phase !== 'over' && humans.length < match.seats.length && humans.every((s) => match.finishOrder.includes(s));
+  useEffect(() => {
+    if (!humansDone) setSkipping(false);
+  }, [humansDone]);
+
   // Computer players: roll, then choose a move. They only pick among legal moves.
   useEffect(() => {
     if (networkSession || !match || screen !== 'board' || match.turn.phase === 'over' || human || rolling) return;
     const seat = match.turn.seat;
+    if (skipping) {
+      // Each frame plays one computer's whole turn.
+      const id = window.setTimeout(() => {
+        let state = match;
+        let events: GameEvent[] = [];
+        for (let guard = 0; guard < 60 && state.turn.seat === seat && state.turn.phase !== 'over'; guard++) {
+          if (state.turn.phase === 'roll') {
+            const value = rollDie();
+            const value2 = state.config.dice === 2 ? rollDie() : undefined;
+            setFace(value);
+            if (value2 !== undefined) setFace2(value2);
+            ({ state, events } = applyAction(state, { type: 'roll', seat, value, value2 }));
+          } else ({ state, events } = applyAction(state, { type: 'move', seat, ...pickMove(state, level) }));
+        }
+        setMatch(state);
+        setMessage(describe(events));
+      }, 25);
+      return () => window.clearTimeout(id);
+    }
     const id = window.setTimeout(
       () => (match.turn.phase === 'roll' ? roll() : act(match, { type: 'move', seat, ...pickMove(match, level) })),
       match.turn.phase === 'roll' ? 1000 : 700,
     );
     return () => window.clearTimeout(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [match, screen, human, rolling, level, networkSession]);
+  }, [match, screen, human, rolling, level, networkSession, skipping]);
 
   // Keep the match across reloads.
   useEffect(() => {
@@ -583,6 +637,20 @@ export function App() {
   const clash = !!match && match.config.targetScore !== null;
   const vsAi = !!match && humans.length < match.seats.length;
   const rival = (seat: Seat) => (online ? (online.room.players.find((pl) => pl.seat === seat)?.name ?? seatName(seat)) : RIVALS[level]);
+  // The line under the board. On a computer's turn the colour label above already says who is playing.
+  const readout =
+    networkSession && netStatus !== 'connected'
+      ? 'Connection lost — reconnecting…'
+      : (forced || !human ? message.replace(' — tap a pawn', '') : message) ||
+        (!human
+          ? online
+            ? online.room.players.find((pl) => pl.seat === match?.turn.seat)?.connected === false
+              ? `${rival(match!.turn.seat)} left — a bot is playing for them`
+              : `Waiting for ${rival(match!.turn.seat)}…`
+            : ''
+          : match?.turn.phase === 'roll'
+            ? 'Roll the die'
+            : 'Tap a pawn');
   const who = (seat: Seat) => (!vsAi ? seatName(seat) : humans.includes(seat) ? 'You' : rival(seat));
 
   return (
@@ -631,7 +699,11 @@ export function App() {
       {screen === 'board' && match && turn && (
         <div className="ui board-ui">
           <header className="topbar">
-            <button className="round-btn" aria-label="Back to lobby" onClick={() => (online ? leaveRoom() : setScreen('lobby'))}>
+            <button
+              className="round-btn"
+              aria-label={over ? 'Back to lobby' : 'Leave game'}
+              onClick={() => (over ? (online ? leaveRoom() : setScreen('lobby')) : setSheet('leave'))}
+            >
               <Back />
             </button>
             {over ? (
@@ -677,10 +749,33 @@ export function App() {
                   {Math.max(0, Math.ceil((deadline - now) / 1000))}s to {turn.phase === 'roll' ? 'roll' : 'move'} · then it plays automatically
                 </small>
               )}
-              <div className="readout" aria-live="polite">
-                {networkSession && netStatus !== 'connected' ? 'Connection lost — reconnecting…' : (forced || !human ? message.replace(' — tap a pawn', '') : message) ||
-                  (!human ? (online ? (online.room.players.find((pl) => pl.seat === turn.seat)?.connected === false ? `${rival(turn.seat)} left — a bot is playing for them` : `Waiting for ${rival(turn.seat)}…`) : `${RIVALS[level]} is playing…`) : turn.phase === 'roll' ? 'Roll the die' : 'Tap a pawn')}
+              <div className="foot-row">
+                <div className={`foot-turn seat-${SEAT_NAMES[turn.seat]}`}>
+                  <i aria-hidden="true" />
+                  {seatName(turn.seat)} is {turn.phase === 'roll' ? 'rolling' : 'moving'}
+                  {human && (vsAi || online) ? ' (you)' : ''}
+                </div>
+                {!humansDone && (
+                  <button className={`auto-toggle ${autoRoll ? 'on' : ''}`} role="switch" aria-checked={autoRoll} onClick={toggleAutoRoll}>
+                    <span className="knob" aria-hidden="true" />
+                    Auto roll
+                  </button>
+                )}
               </div>
+              {readout && (
+                <div className="readout" aria-live="polite">
+                  {readout}
+                </div>
+              )}
+              {humansDone && (
+                <button className="mode on skip-btn" disabled={skipping} onClick={() => setSkipping(true)}>
+                  <span>
+                    <strong>{skipping ? 'Fast-forwarding…' : 'Skip to end'}</strong>
+                    <small>{skipping ? 'Playing out the computer turns' : 'You are home. Fast-forward the computer players.'}</small>
+                  </span>
+                  {!skipping && <Chevron />}
+                </button>
+              )}
               <div className="roll-row">
                 {twoDice ? (
                   <div className="dice-pair" role="group" aria-label="Dice — tap one to choose which to use">
@@ -770,6 +865,40 @@ export function App() {
             </button>
           </div>
         </div>
+      )}
+
+      {sheet === 'leave' && (
+        <Sheet title="Leave game?" onClose={() => setSheet(null)}>
+          <button className="mode on" onClick={() => setSheet(null)}>
+            <span>
+              <strong>Keep playing</strong>
+            </span>
+            <Chevron />
+          </button>
+          {online ? (
+            <button className="mode" onClick={() => (setSheet(null), leaveRoom())}>
+              <span>
+                <strong>Leave game</strong>
+                <small>A bot plays your pawns for the rest of the match. You can't rejoin.</small>
+              </span>
+            </button>
+          ) : (
+            <>
+              <button className="mode" onClick={() => (setSheet(null), setScreen('lobby'))}>
+                <span>
+                  <strong>Save and exit</strong>
+                  <small>Resume this match later from Play</small>
+                </span>
+              </button>
+              <button className="mode" onClick={() => (setSheet(null), setMatch(null), setScreen('lobby'))}>
+                <span>
+                  <strong>Quit match</strong>
+                  <small>End this match without saving</small>
+                </span>
+              </button>
+            </>
+          )}
+        </Sheet>
       )}
 
       {sheet === 'play' && (

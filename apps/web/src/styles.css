@@ -436,6 +436,76 @@ button:focus-visible {
   gap: 8px;
   text-align: center;
 }
+.skip-btn {
+  width: min(100%, 420px);
+}
+.foot-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+}
+.auto-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px 5px 6px;
+  border-radius: 999px;
+  font-weight: 800;
+  font-size: 14px;
+  color: var(--muted);
+  background: rgba(6, 13, 43, 0.82);
+  box-shadow: inset 0 0 0 1.5px rgba(120, 165, 255, 0.35);
+}
+.auto-toggle .knob {
+  position: relative;
+  width: 30px;
+  height: 18px;
+  border-radius: 999px;
+  background: rgba(120, 165, 255, 0.3);
+  transition: background 0.15s;
+}
+.auto-toggle .knob::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s;
+}
+.auto-toggle.on {
+  color: var(--text);
+  box-shadow: inset 0 0 0 2px var(--gold-500);
+}
+.auto-toggle.on .knob {
+  background: var(--gold-500);
+}
+.auto-toggle.on .knob::after {
+  transform: translateX(12px);
+}
+.foot-turn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 14px 5px 8px;
+  border-radius: 999px;
+  font-weight: 800;
+  font-size: 14px;
+  color: var(--text);
+  background: rgba(6, 13, 43, 0.82);
+  box-shadow: inset 0 0 0 2px var(--seat);
+}
+.foot-turn i {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--seat);
+  box-shadow: 0 0 10px var(--seat);
+}
 .readout {
   padding: 12px 22px;
   border-radius: 999px;
