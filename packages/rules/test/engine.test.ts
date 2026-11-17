@@ -58,7 +58,7 @@ describe('setup', () => {
   });
 
   it('rejects unsupported player and pawn counts', () => {
-    expect(() => createMatch({ players: 5 })).toThrow(RuleError);
+    expect(() => createMatch({ players: 9 })).toThrow(RuleError);
     expect(() => createMatch({ config: { pawnsPerPlayer: 5 as never } })).toThrow(RuleError);
     expect(() => createMatch({ seats: [0, 0] })).toThrow(RuleError);
   });

@@ -22,9 +22,10 @@ export const SEAT_TRACK_OFFSET = 13;
 /** Safe star squares sit this many squares after each start square. */
 export const STAR_OFFSET = 8;
 
-export type Seat = 0 | 1 | 2 | 3;
+/** Seats 0-3 exist on every board; 4-7 only on the larger boards (see layout.ts). */
+export type Seat = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
 export const SEATS: readonly Seat[] = [0, 1, 2, 3];
-export const SEAT_NAMES = ['red', 'green', 'yellow', 'blue'] as const;
+export const SEAT_NAMES = ['red', 'green', 'yellow', 'blue', 'purple', 'orange', 'teal', 'pink'] as const;
 export type SeatName = (typeof SEAT_NAMES)[number];
 
 export interface Cell {

@@ -8,9 +8,9 @@ const PIPS: Record<number, number[]> = {
 };
 
 /** HUD die showing the last roll. Tumbles while a roll is in progress. */
-export function Die({ value, rolling }: { value: number; rolling: boolean }) {
+export function Die({ value, rolling, skin = 'dice_ivory' }: { value: number; rolling: boolean; skin?: string }) {
   return (
-    <div className={`die ${rolling ? 'rolling' : ''}`} role="img" aria-label={rolling ? 'Rolling' : `Die shows ${value}`}>
+    <div className={`die ${skin} ${rolling ? 'rolling' : ''}`} role="img" aria-label={rolling ? 'Rolling' : `Die shows ${value}`}>
       {Array.from({ length: 9 }, (_, i) => (
         <i key={i} className={!rolling && PIPS[value]!.includes(i) ? 'on' : ''} />
       ))}

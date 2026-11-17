@@ -6,7 +6,8 @@
  * happened. Dice values arrive inside roll actions, so an action log replays
  * to exactly the same match on any machine (client, server, tests).
  */
-import { PATH_LENGTH, SEATS, SEAT_TRACK_OFFSET, TRACK, TRACK_LENGTH, type Seat } from './classicBoard';
+import { PATH_LENGTH, TRACK_LENGTH, type Seat } from './classicBoard';
+import { MAX_BOARD_SEATS, MIN_BOARD_SEATS, SQUARES_PER_SEAT, boardSeatsFor, boardShape, isSafeTrackIndex } from './layout';
 
 /** Pawn progress values: -1 in the yard, 0–55 on the path, 56 finished. */
 export const YARD = -1;
@@ -28,6 +29,8 @@ export interface RulesConfig {
   stackBonuses: boolean;
   /** Two friendly pawns on a shared square block opponents from landing or passing. */
   blockades: boolean;
+  /** Arms on the board: 4 is the classic board, 5-8 the larger star boards. */
+  boardSeats: number;
   /** Pawns that begin on the start square instead of in the yard (Quick modes). */
   startOnBoard: number;
   /** Pawns a seat must bring home to finish. null means all of them. */
@@ -47,6 +50,7 @@ export const CLASSIC_RULES: RulesConfig = {
   bonusOnFinish: false,
   stackBonuses: false,
   blockades: true,
+  boardSeats: 4,
   startOnBoard: 0,
   pawnsToWin: null,
   endOnFirstFinish: false,
@@ -140,15 +144,28 @@ export class RuleError extends Error {
 export const defaultSeats = (playerCount: number): Seat[] => {
   if (playerCount === 2) return [0, 2];
   if (playerCount === 3) return [0, 1, 2];
-  if (playerCount === 4) return [0, 1, 2, 3];
-  throw new RuleError('The classic board seats 2 to 4 players');
+  if (Number.isInteger(playerCount) && playerCount >= 4 && playerCount <= MAX_BOARD_SEATS)
+    return Array.from({ length: playerCount }, (_, i) => i as Seat);
+  throw new RuleError(`Matches have 2 to ${MAX_BOARD_SEATS} players`);
 };
 
+/** Board size and step values for a match. Matches saved before larger boards existed are classic. */
+export const shapeOf = (state: MatchState) => boardShape(state.config.boardSeats ?? 4);
+/** The step value of a pawn that is home, for this match's board. */
+export const finishStepOf = (state: MatchState): number => shapeOf(state).finishStep;
+
 export function createMatch(options: { players?: number; seats?: Seat[]; config?: Partial<RulesConfig> } = {}): MatchState {
-  const config = { ...CLASSIC_RULES, ...options.config };
   const seats = options.seats ? [...options.seats] : defaultSeats(options.players ?? 4);
-  if (seats.length < 2 || seats.length > 4 || new Set(seats).size !== seats.length || seats.some((s) => !SEATS.includes(s)))
-    throw new RuleError('Seats must be 2 to 4 distinct classic seats');
+  const config = { ...CLASSIC_RULES, ...options.config };
+  // Five or more players always get a board with at least one arm each, even when a
+  // mode preset says 4. A larger board can still be asked for explicitly.
+  config.boardSeats = Math.max(config.boardSeats ?? 4, boardSeatsFor(seats.length));
+  const boardSeats = config.boardSeats;
+  if (!Number.isInteger(boardSeats) || boardSeats < MIN_BOARD_SEATS || boardSeats > MAX_BOARD_SEATS)
+    throw new RuleError(`Boards have ${MIN_BOARD_SEATS} to ${MAX_BOARD_SEATS} seats`);
+  if (seats.length < 2 || new Set(seats).size !== seats.length || seats.some((s) => !Number.isInteger(s) || s < 0 || s >= boardSeats))
+    throw new RuleError('Seats must be 2 or more distinct seats that exist on the board');
+  const boardIndexes = Array.from({ length: boardSeats }, (_, i) => i as Seat);
   if (![2, 3, 4].includes(config.pawnsPerPlayer)) throw new RuleError('Pawns per player must be 2, 3 or 4');
   const whole = (n: number, min: number, max: number) => Number.isInteger(n) && n >= min && n <= max;
   if (!whole(config.startOnBoard, 0, config.pawnsPerPlayer)) throw new RuleError('Invalid number of pawns starting on the board');
@@ -158,22 +175,28 @@ export function createMatch(options: { players?: number; seats?: Seat[]; config?
   return {
     config,
     seats,
-    pawns: SEATS.map((s) =>
+    pawns: boardIndexes.map((s) =>
       seats.includes(s) ? Array.from({ length: config.pawnsPerPlayer }, (_, i) => (i < config.startOnBoard ? 0 : YARD)) : [],
     ),
     turn: { seat: seats[0]!, phase: 'roll', die: null, sixes: 0, pendingBonus: 0 },
     finishOrder: [],
-    scores: SEATS.map(() => 0),
+    scores: boardIndexes.map(() => 0),
     version: 0,
   };
 }
 
 /** Shared-loop square a pawn stands on, or null in the yard, lane or finish. */
-export const trackIndexAt = (seat: Seat, step: number): number | null =>
-  step < 0 || step > LAST_SHARED_STEP ? null : (seat * SEAT_TRACK_OFFSET + step) % TRACK_LENGTH;
+export const trackIndexAt = (seat: Seat, step: number, boardSeats = 4): number | null => {
+  const trackLength = SQUARES_PER_SEAT * boardSeats;
+  return step < 0 || step > trackLength - 2 ? null : (seat * SQUARES_PER_SEAT + step) % trackLength;
+};
+
+/** Shared-loop square of a pawn in this match, or null in the yard, lane or finish. */
+export const trackIndexIn = (state: MatchState, seat: Seat, step: number): number | null =>
+  trackIndexAt(seat, step, state.config.boardSeats ?? 4);
 
 const pawnsOn = (state: MatchState, seat: Seat, trackIndex: number): number[] =>
-  state.pawns[seat]!.flatMap((step, pawn) => (trackIndexAt(seat, step) === trackIndex ? [pawn] : []));
+  state.pawns[seat]!.flatMap((step, pawn) => (trackIndexIn(state, seat, step) === trackIndex ? [pawn] : []));
 
 const opponentsOf = (state: MatchState, seat: Seat) => state.seats.filter((s) => s !== seat);
 
@@ -185,22 +208,23 @@ export function legalMoves(state: MatchState, die: number | null = state.turn.di
   if (die === null || state.turn.phase === 'over') return [];
   const seat = state.turn.seat;
   const moves: LegalMove[] = [];
+  const finish = finishStepOf(state);
   state.pawns[seat]!.forEach((from, pawn) => {
-    if (from === FINISH_STEP) return;
+    if (from === finish) return;
     if (from === YARD && die !== 6) return; // a six is required to enter
     const to = from === YARD ? 0 : from + die;
-    if (to > FINISH_STEP) return; // finishing needs the exact number
+    if (to > finish) return; // finishing needs the exact number
     // Squares travelled over, then the landing square. Entering only touches the start.
     for (let step = from === YARD ? 0 : from + 1; step <= to; step++) {
-      const idx = trackIndexAt(seat, step);
+      const idx = trackIndexIn(state, seat, step);
       if (idx !== null && blockadeAt(state, seat, idx)) return;
     }
-    const landing = trackIndexAt(seat, to);
+    const landing = trackIndexIn(state, seat, to);
     const captures: PawnRef[] =
-      landing === null || TRACK[landing]!.safe
+      landing === null || isSafeTrackIndex(landing)
         ? []
         : opponentsOf(state, seat).flatMap((s) => pawnsOn(state, s, landing).map((p) => ({ seat: s, pawn: p })));
-    moves.push({ pawn, from, to, captures, finishes: to === FINISH_STEP });
+    moves.push({ pawn, from, to, captures, finishes: to === finish });
   });
   return moves;
 }
@@ -277,7 +301,8 @@ function applyMove(state: MatchState, pawn: number, events: GameEvent[]) {
     events.push({ type: 'scored', seat, points, total: state.scores[seat]! });
   }
 
-  const homeCount = (s: Seat) => state.pawns[s]!.filter((step) => step === FINISH_STEP).length;
+  const finish = finishStepOf(state);
+  const homeCount = (s: Seat) => state.pawns[s]!.filter((step) => step === finish).length;
   const seatDone = homeCount(seat) >= (state.config.pawnsToWin ?? state.pawns[seat]!.length);
   const scoreWin = targetScore !== null && state.scores[seat]! >= targetScore;
   const endMatch = () => {
@@ -375,7 +400,7 @@ export function deserializeMatch(json: string): MatchState {
   if (s.pawns.length !== fresh.pawns.length) fail('pawn lists');
   s.pawns.forEach((list, seat) => {
     if (!Array.isArray(list) || list.length !== fresh.pawns[seat]!.length) fail('pawn count');
-    if (list.some((p) => !Number.isInteger(p) || p < YARD || p > FINISH_STEP)) fail('pawn position');
+    if (list.some((p) => !Number.isInteger(p) || p < YARD || p > boardShape(fresh.config.boardSeats).finishStep)) fail('pawn position');
   });
   const t = s.turn;
   if (!s.seats.includes(t.seat) || !['roll', 'move', 'over'].includes(t.phase)) fail('turn');
@@ -384,7 +409,7 @@ export function deserializeMatch(json: string): MatchState {
   if (!Number.isInteger(t.sixes) || t.sixes < 0 || t.sixes >= SIX_LIMIT) fail('six streak');
   if (!Number.isInteger(t.pendingBonus) || t.pendingBonus < 0) fail('bonus');
   if (!Array.isArray(s.finishOrder) || s.finishOrder.some((x) => !s.seats.includes(x))) fail('finish order');
-  if (!Array.isArray(s.scores) || s.scores.length !== SEATS.length || s.scores.some((n) => !Number.isInteger(n) || n < 0)) fail('scores');
+  if (!Array.isArray(s.scores) || s.scores.length !== fresh.scores.length || s.scores.some((n) => !Number.isInteger(n) || n < 0)) fail('scores');
   if (!Number.isInteger(s.version) || s.version < 0) fail('version');
-  return clone(s);
+  return { ...clone(s), config: fresh.config };
 }

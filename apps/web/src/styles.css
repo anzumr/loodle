@@ -935,3 +935,141 @@ button:focus-visible {
 .sheet > * {
   flex-shrink: 0;
 }
+
+.seat-purple {
+  --seat: #a56bf0;
+}
+.seat-orange {
+  --seat: #f58a2e;
+}
+.seat-teal {
+  --seat: #1fc7b7;
+}
+.seat-pink {
+  --seat: #f065b3;
+}
+/* Up to eight player chips: let them wrap rather than run off a phone screen. */
+.seats {
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.segmented.compact.wide button {
+  font-size: 15px;
+}
+
+.xp-bar {
+  display: block;
+  width: 96px;
+  height: 6px;
+  margin-top: 4px;
+  border-radius: 999px;
+  background: rgba(6, 13, 43, 0.85);
+  overflow: hidden;
+}
+.xp-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--gold-500), var(--gold-100));
+}
+.xp-bar.big {
+  width: 100%;
+  height: 10px;
+}
+.setting small.done {
+  color: var(--gold-300);
+}
+.setting.reward {
+  box-shadow: inset 0 0 0 2px var(--gold-500), 0 0 20px rgba(255, 190, 40, 0.3);
+}
+.setting.reward strong {
+  color: var(--gold-300);
+}
+
+/* ---------- collection ---------- */
+
+.cosmetic {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.cosmetic > span:nth-child(2) {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+.cosmetic em {
+  font-style: normal;
+  font-weight: 800;
+  font-size: 13px;
+  color: var(--gold-300);
+}
+.chip-btn {
+  min-width: 96px;
+  height: 40px;
+  padding: 0 14px;
+  border-radius: 999px;
+  font-weight: 800;
+  background: linear-gradient(180deg, #2a4cb4, #10225e);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3), inset 0 -3px 0 rgba(0, 0, 0, 0.25);
+}
+.chip-btn.buy:not(:disabled) {
+  color: var(--ink);
+  background: linear-gradient(180deg, var(--gold-100), var(--gold-500));
+}
+.chip-btn:disabled {
+  opacity: 0.55;
+}
+.swatch {
+  width: 40px;
+  height: 40px;
+  flex: none;
+  border-radius: 10px;
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.25);
+}
+.swatch.board_classic {
+  background: linear-gradient(135deg, #f7f2e6 50%, #1b2550 50%);
+  box-shadow: inset 0 0 0 3px #e2a92b;
+}
+.swatch.board_midnight {
+  background: linear-gradient(135deg, #dfe6ff 50%, #080d22 50%);
+  box-shadow: inset 0 0 0 3px #9fb2d6;
+}
+.swatch.board_royal {
+  background: linear-gradient(135deg, #fff3d6 50%, #4a1030 50%);
+  box-shadow: inset 0 0 0 3px #d49a1a;
+}
+.swatch.pawn_glossy {
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 25%, #fff 0 8%, #ff6b6b 20%, #a3121a);
+}
+.swatch.pawn_metal {
+  border-radius: 50%;
+  background: linear-gradient(135deg, #7a0d14, #ff9a9a 45%, #8f1018 60%, #e5262f);
+}
+.swatch.pawn_pearl {
+  border-radius: 50%;
+  background: radial-gradient(circle at 40% 35%, #ffc9c9, #d9434b 70%);
+}
+.swatch.dice_ivory {
+  background: linear-gradient(145deg, #fff, #dfe3ee);
+}
+.swatch.dice_ruby {
+  background: linear-gradient(145deg, #ff6b6b, #a3121a);
+}
+.swatch.dice_onyx {
+  background: linear-gradient(145deg, #3a3f55, #0b0d18);
+}
+.die.dice_ruby {
+  background: linear-gradient(145deg, #ff6b6b, #b0151d);
+}
+.die.dice_ruby i.on {
+  background: radial-gradient(circle at 35% 30%, #fff, #ffd9d9);
+}
+.die.dice_onyx {
+  background: linear-gradient(145deg, #3a3f55, #0b0d18);
+}
+.die.dice_onyx i.on {
+  background: radial-gradient(circle at 35% 30%, #fff3b8, #f8b417);
+}

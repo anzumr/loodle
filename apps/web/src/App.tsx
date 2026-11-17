@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AI_LEVELS,
   CLASSIC_RULES,
-  FINISH_STEP,
+  finishStepOf,
   QUICK_CLASH_RULES,
   QUICK_RACE_RULES,
   SEAT_NAMES,
@@ -23,7 +23,8 @@ import { Die } from './ui/Die';
 import { Tutorial } from './ui/Tutorial';
 import { AccountPanel, type Account } from './ui/AccountPanel';
 import { play, setSoundEnabled, type Sfx } from './sound';
-import { AVATAR_COUNT, cleanAvatar, validateUsername } from '@loodl/rules';
+import { COSMETICS, buyCosmetic, equipCosmetic, sanitizeWardrobe, type Wardrobe } from '@loodl/rules';
+import { ACHIEVEMENTS, AVATAR_COUNT, applyMatch, challengesFor, cleanAvatar, levelFor, sanitizeProgress, validateUsername, type Progress, type Reward } from '@loodl/rules';
 import { AVATAR_NAMES, Avatar } from './ui/Avatar';
 import { connect, playerToken, rememberedRoom, rememberRoom, type Connection, type ConnectionStatus, type RoomView, type ServerMessage } from './net';
 import { Back, Chest, Chevron, Crown, Gear, Pawn, People } from './ui/icons';
@@ -123,12 +124,13 @@ export function App() {
   const [screen, setScreen] = useState<Screen>('lobby');
   const [tutorial, setTutorial] = useState(false);
   const [view, setView] = useState<View>('angled');
-  const [sheet, setSheet] = useState<'play' | 'settings' | 'help' | 'friends' | 'account' | null>(null);
+  const [sheet, setSheet] = useState<'play' | 'settings' | 'help' | 'friends' | 'account' | 'collection' | null>(null);
   const [account, setAccount] = useState<Account | null>(null);
   const [variant, setVariant] = useState<Variant>('classic');
   const [quality, setQuality] = useState<Quality>(loadQuality);
   const saved = useMemo(loadSaved, []);
   const [players, setPlayers] = useState(4);
+  const [pawnCount, setPawnCount] = useState<2 | 3 | 4>(4);
   const [solo, setSolo] = useState(true);
   const [level, setLevel] = useState<AiLevel>(saved?.level ?? 'medium');
   const [humans, setHumans] = useState<Seat[]>(saved?.humans ?? [0]);
@@ -182,6 +184,55 @@ export function App() {
     }
   };
   const [code, setCode] = useState('');
+  const [progress, setProgress] = useState<Progress>(() => {
+    try {
+      return sanitizeProgress(JSON.parse(localStorage.getItem('loodl.progress') ?? 'null'));
+    } catch {
+      return sanitizeProgress(null);
+    }
+  });
+  const [reward, setReward] = useState<Reward | null>(null);
+  const [wardrobe, setWardrobe] = useState<Wardrobe>(() => {
+    try {
+      return sanitizeWardrobe(JSON.parse(localStorage.getItem('loodl.wardrobe') ?? 'null'));
+    } catch {
+      return sanitizeWardrobe(null);
+    }
+  });
+  const store = (key: string, value: unknown) => {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch {
+      /* storage unavailable: lasts for this visit only */
+    }
+  };
+  const equip = (id: string) => {
+    const next = equipCosmetic(wardrobe, id);
+    setWardrobe(next);
+    store('loodl.wardrobe', next);
+  };
+  const buy = (id: string) => {
+    const result = buyCosmetic(wardrobe, id, progress.coins, levelFor(progress.xp).level);
+    if (!result.ok) return;
+    const paid = { ...progress, coins: result.coins };
+    const next = equipCosmetic(result.wardrobe, id);
+    setProgress(paid);
+    setWardrobe(next);
+    store('loodl.progress', paid);
+    store('loodl.wardrobe', next);
+  };
+  /** What this player has done in the current match, for rewards. */
+  const tally = useRef({ captures: 0, sixes: 0 });
+  const mySeat = useRef<Seat | null>(null);
+  const rewardedMatch = useRef<MatchState | null>(null);
+  const countEvents = (events: GameEvent[]) => {
+    for (const e of events) {
+      if (e.type === 'rolled' && e.value === 6 && e.seat === mySeat.current) tally.current.sixes++;
+      if (e.type === 'captured' && e.by === mySeat.current) tally.current.captures++;
+    }
+  };
+  const rank = levelFor(progress.xp);
+  const today = new Date().toISOString().slice(0, 10);
   const conn = useRef<Connection | null>(null);
 
   useEffect(() => {
@@ -249,6 +300,8 @@ export function App() {
         const rolled = m.events.find((e) => e.type === 'rolled');
         if (rolled && rolled.type === 'rolled') setFace(rolled.value);
         else if (m.room.match.turn.die !== null) setFace(m.room.match.turn.die);
+        countEvents(m.events);
+        if (m.room.match.version === 0) tally.current = { captures: 0, sixes: 0 };
         if (m.events.length) setMessage(describe(m.events));
         const sfx = (Object.keys(SOUNDS) as GameEvent['type'][]).find((type) => m.events.some((e) => e.type === type));
         if (sfx) play(SOUNDS[sfx]!);
@@ -289,6 +342,7 @@ export function App() {
   const act = useCallback((state: MatchState, action: Parameters<typeof applyAction>[1]) => {
     const result = applyAction(state, action);
     setMatch(result.state);
+    countEvents(result.events);
     setMessage(describe(result.events));
     const sfx = (Object.keys(SOUNDS) as GameEvent['type'][]).find((type) => result.events.some((e) => e.type === type));
     if (sfx) play(SOUNDS[sfx]!);
@@ -340,7 +394,9 @@ export function App() {
   useEffect(() => {
     const showing = screen === 'board' && match;
     scene.current?.setView(
-      showing ? { pawns: match.pawns, seat: match.turn.seat, movable: forced || !human ? [] : moves.map((m) => m.pawn) } : null,
+      showing
+        ? { pawns: match.pawns, seat: match.turn.seat, movable: forced || !human ? [] : moves.map((m) => m.pawn), boardSeats: match.config.boardSeats }
+        : null,
     );
   }, [screen, match, moves, forced, human, tutorial]);
 
@@ -383,6 +439,10 @@ export function App() {
   }, [sound]);
 
   useEffect(() => {
+    scene.current?.setSkin(wardrobe.equipped.board, wardrobe.equipped.pawn);
+  }, [wardrobe]);
+
+  useEffect(() => {
     scene.current?.setQuality(quality);
     try {
       localStorage.setItem(QUALITY_KEY, quality);
@@ -392,13 +452,54 @@ export function App() {
   }, [quality, tutorial]);
 
   const startMatch = () => {
-    const fresh = createMatch({ players, config: VARIANTS[variant].rules });
+    const fresh = createMatch({ players, config: { ...VARIANTS[variant].rules, pawnsPerPlayer: pawnCount } });
+    tally.current = { captures: 0, sixes: 0 };
+    setReward(null);
     setHumans(solo ? [fresh.seats[0]!] : fresh.seats);
     setMatch(fresh);
     setMessage('');
     setSheet(null);
     setScreen('board');
   };
+
+  // Rewards: online matches and solo matches against the computer. Pass & Play earns nothing,
+  // because one person controls every seat.
+  useEffect(() => {
+    mySeat.current = humans.length === 1 ? humans[0]! : null;
+  }, [humans]);
+  useEffect(() => {
+    if (!match || match.turn.phase !== 'over' || rewardedMatch.current === match) return;
+    rewardedMatch.current = match;
+    const seat = humans.length === 1 ? humans[0]! : null;
+    const place = seat === null ? 0 : match.finishOrder.indexOf(seat) + 1;
+    if (seat === null || place === 0 || match.seats.length < 2) return setReward(null);
+    const variantOf = match.config.targetScore !== null ? 'clash' : match.config.endOnFirstFinish ? 'race' : 'classic';
+    const result = applyMatch(
+      progress,
+      {
+        id: online ? `online:${online.room.code}:${match.version}` : `solo:${Date.now()}`,
+        kind: online ? 'online' : 'solo',
+        variant: variantOf,
+        players: match.seats.length,
+        place,
+        captures: tally.current.captures,
+        pawnsHome: match.pawns[seat]!.filter((p) => p === finishStepOf(match)).length,
+        sixes: tally.current.sixes,
+        aiLevel: online ? undefined : level,
+      },
+      today,
+    );
+    setReward(result.reward);
+    if (result.reward) {
+      setProgress(result.progress);
+      try {
+        localStorage.setItem('loodl.progress', JSON.stringify(result.progress));
+      } catch {
+        /* storage unavailable: progress lasts for this visit only */
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [match]);
 
   const turn = match?.turn;
   const over = turn?.phase === 'over';
@@ -420,7 +521,12 @@ export function App() {
               <Avatar id={avatar} />
               <span className="profile-text">
                 <strong>{nameCheck.ok ? nameCheck.name : (account?.name ?? 'Guest')}</strong>
-                <small>{account ? 'Google account' : 'Guest · tap to edit profile'}</small>
+                <small>
+                  Lv {rank.level} · {progress.coins} coins
+                </small>
+                <span className="xp-bar" aria-hidden="true">
+                  <i style={{ width: `${Math.round((rank.into / rank.needed) * 100)}%` }} />
+                </span>
               </span>
             </button>
             <button className="round-btn" aria-label="Settings" onClick={() => setSheet('settings')}>
@@ -439,7 +545,7 @@ export function App() {
             <nav className="tiles" aria-label="More ways to play">
               <Tile icon={<Pawn />} title="Solo" sub="Play Offline" tone="gold" onClick={() => (setSolo(true), setSheet('play'))} />
               <Tile icon={<People />} title="Friends" sub="Play Together" tone="blue" onClick={() => setSheet('friends')} />
-              <Tile icon={<Chest />} title="Collection" sub="Boards & Pawns" tone="red" />
+              <Tile icon={<Chest />} title="Collection" sub="Boards & Pawns" tone="red" onClick={() => setSheet('collection')} />
             </nav>
           </div>
         </div>
@@ -471,7 +577,7 @@ export function App() {
 
           <div className="seats" aria-label="Players">
             {match.seats.map((seat) => {
-              const home = match.pawns[seat]!.filter((p) => p === FINISH_STEP).length;
+              const home = match.pawns[seat]!.filter((p) => p === finishStepOf(match)).length;
               return (
                 <span
                   key={seat}
@@ -495,7 +601,7 @@ export function App() {
                   (!human ? (online ? `Waiting for ${rival(turn.seat)}…` : `${RIVALS[level]} is playing…`) : turn.phase === 'roll' ? 'Roll the die' : 'Tap a pawn')}
               </div>
               <div className="roll-row">
-                <Die value={face} rolling={rolling} />
+                <Die value={face} rolling={rolling} skin={wardrobe.equipped.dice} />
                 <button className="play-btn roll-btn" onClick={roll} disabled={!human || turn.phase !== 'roll' || rolling}>
                   ROLL
                 </button>
@@ -512,6 +618,22 @@ export function App() {
               <h2>{vsAi && humans.includes(match.finishOrder[0]!) ? 'You win!' : `${seatName(match.finishOrder[0]!)} wins!`}</h2>
               <Crown style={{ width: 44 }} />
             </div>
+            {reward ? (
+              <div className="setting stacked reward" aria-live="polite">
+                <strong>
+                  +{reward.xp} XP · +{reward.coins} coins
+                  {reward.levelAfter > reward.levelBefore ? ` · Level ${reward.levelAfter}!` : ''}
+                </strong>
+                {reward.achievements.map((a) => (
+                  <small key={a.id}>Achievement unlocked: {a.title} (+{a.coins} coins)</small>
+                ))}
+                {reward.challenges.map((c) => (
+                  <small key={c.id}>Daily challenge done: {c.title}</small>
+                ))}
+              </div>
+            ) : (
+              humans.length !== 1 && <p className="hint">Pass &amp; Play matches don’t earn XP or coins.</p>
+            )}
             {match.finishOrder.map((seat, i) => (
               <div className="setting" key={seat}>
                 <span className={`place seat-${SEAT_NAMES[seat]}`}>
@@ -520,7 +642,7 @@ export function App() {
                 </span>
                 <strong>
                   {clash ? `${match.scores[seat]} pts · ` : ''}
-                  {['1st', '2nd', '3rd', '4th'][i]}
+                  {['1st', '2nd', '3rd', '4th', '5th', '6th', '7th', '8th'][i]}
                 </strong>
               </div>
             ))}
@@ -578,13 +700,26 @@ export function App() {
               </button>
             </div>
           </div>
-          <div className="setting">
+          <div className="setting stacked">
             <span>
               <strong>Players</strong>
+              <small>{players <= 4 ? 'Classic board' : `${players}-sided board, one arm each`}</small>
             </span>
-            <div className="segmented" role="group" aria-label="Number of players">
-              {[2, 3, 4].map((n) => (
+            <div className="segmented compact wide" role="group" aria-label="Number of players">
+              {[2, 3, 4, 5, 6, 7, 8].map((n) => (
                 <button key={n} className={players === n ? 'on' : ''} aria-pressed={players === n} onClick={() => setPlayers(n)}>
+                  {n}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="setting">
+            <span>
+              <strong>Pawns each</strong>
+            </span>
+            <div className="segmented" role="group" aria-label="Pawns per player">
+              {([2, 3, 4] as const).map((n) => (
+                <button key={n} className={pawnCount === n ? 'on' : ''} aria-pressed={pawnCount === n} onClick={() => setPawnCount(n)}>
                   {n}
                 </button>
               ))}
@@ -731,6 +866,46 @@ export function App() {
         </Sheet>
       )}
 
+      {sheet === 'collection' && (
+        <Sheet title="Collection" onClose={() => setSheet(null)}>
+          <p className="hint">
+            {progress.coins} coins · Level {rank.level}. Skins change looks only and never affect dice, moves or results.
+          </p>
+          {(['board', 'pawn', 'dice'] as const).map((kind) => (
+            <div className="setting stacked" key={kind}>
+              <strong>{{ board: 'Board skins', pawn: 'Pawn finishes', dice: 'Dice' }[kind]}</strong>
+              {COSMETICS.filter((c) => c.kind === kind).map((c) => {
+                const owned = wardrobe.owned.includes(c.id);
+                const equipped = wardrobe.equipped[kind] === c.id;
+                const locked = !owned && rank.level < c.level;
+                const short = !owned && !locked && progress.coins < c.price;
+                return (
+                  <div className="cosmetic" key={c.id}>
+                    <span className={`swatch ${c.id}`} aria-hidden="true" />
+                    <span>
+                      <strong>{c.name}</strong>
+                      <small>{c.detail}</small>
+                    </span>
+                    {equipped ? (
+                      <em>Equipped</em>
+                    ) : owned ? (
+                      <button className="chip-btn" onClick={() => equip(c.id)}>
+                        Equip
+                      </button>
+                    ) : (
+                      <button className="chip-btn buy" disabled={locked || short} onClick={() => buy(c.id)}>
+                        {locked ? `Level ${c.level}` : `${c.price} coins`}
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+          <p className="hint">Coins are earned by playing. There is nothing to buy with real money.</p>
+        </Sheet>
+      )}
+
       {sheet === 'help' && (
         <Sheet title="How to play" onClose={() => setSheet('play')}>
           <button className="mode on" onClick={() => (setSheet(null), setTutorial(true))}>
@@ -766,6 +941,45 @@ export function App() {
             </div>
           </div>
           <p className="hint">Other players only ever see your name and picture. Names are not unique.</p>
+          <div className="setting stacked">
+            <span>
+              <strong>
+                Level {rank.level} · {progress.coins} coins
+              </strong>
+              <small>
+                {rank.into} / {rank.needed} XP to level {rank.level + 1}
+              </small>
+            </span>
+            <span className="xp-bar big" aria-hidden="true">
+              <i style={{ width: `${Math.round((rank.into / rank.needed) * 100)}%` }} />
+            </span>
+            <small>
+              {progress.stats.matches} matches · {progress.stats.wins} wins · {progress.stats.captures} captures · {progress.stats.pawnsHome} pawns home
+            </small>
+          </div>
+          <div className="setting stacked">
+            <strong>Today’s challenges</strong>
+            {challengesFor(today).map((c) => {
+              const done = progress.daily.date === today && progress.daily.done.includes(c.id);
+              const value = progress.daily.date === today ? (progress.daily.progress[c.id] ?? 0) : 0;
+              return (
+                <small key={c.id} className={done ? 'done' : ''}>
+                  {done ? '✓' : `${value}/${c.goal}`} {c.title} · +{c.xp} XP, +{c.coins} coins
+                </small>
+              );
+            })}
+          </div>
+          <div className="setting stacked">
+            <strong>
+              Achievements {progress.achievements.length}/{ACHIEVEMENTS.length}
+            </strong>
+            {ACHIEVEMENTS.map((a) => (
+              <small key={a.id} className={progress.achievements.includes(a.id) ? 'done' : ''}>
+                {progress.achievements.includes(a.id) ? '✓' : '○'} {a.title} — {a.detail}
+              </small>
+            ))}
+          </div>
+          <p className="hint">Progress is saved on this device only. Solo matches earn half of what online matches do.</p>
           <AccountPanel onChange={setAccount} />
         </Sheet>}
 

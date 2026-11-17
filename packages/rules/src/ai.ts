@@ -4,8 +4,8 @@
  * The AI only ever chooses among the legal moves for a die it was given.
  * It never sees, rolls or influences dice, so difficulty cannot affect fairness.
  */
-import { TRACK, TRACK_LENGTH } from './classicBoard';
-import { LAST_SHARED_STEP, YARD, legalMoves, trackIndexAt, type LegalMove, type MatchState } from './engine';
+import { isSafeTrackIndex } from './layout';
+import { YARD, legalMoves, shapeOf, trackIndexIn, type LegalMove, type MatchState } from './engine';
 
 export const AI_LEVELS = ['beginner', 'easy', 'medium', 'hard', 'expert'] as const;
 export type AiLevel = (typeof AI_LEVELS)[number];
@@ -53,17 +53,17 @@ const LEVELS: Record<AiLevel, Weights> = {
 /** Opponent pawns that could land on this seat's pawn if it stood at `step`. */
 function threats(state: MatchState, step: number): number {
   const seat = state.turn.seat;
-  const here = trackIndexAt(seat, step);
-  if (here === null || TRACK[here]!.safe) return 0;
+  const here = trackIndexIn(state, seat, step);
+  if (here === null || isSafeTrackIndex(here)) return 0;
   let count = 0;
   for (const other of state.seats) {
     if (other === seat) continue;
     for (const theirStep of state.pawns[other]!) {
-      const there = trackIndexAt(other, theirStep);
+      const there = trackIndexIn(state, other, theirStep);
       if (there === null) continue;
-      const gap = (here - there + TRACK_LENGTH) % TRACK_LENGTH;
+      const gap = (here - there + shapeOf(state).trackLength) % shapeOf(state).trackLength;
       // They must still be on the shared loop when they arrive.
-      if (gap >= 1 && gap <= 6 && theirStep + gap <= LAST_SHARED_STEP) count++;
+      if (gap >= 1 && gap <= 6 && theirStep + gap <= shapeOf(state).lastSharedStep) count++;
     }
   }
   return count;
@@ -72,16 +72,16 @@ function threats(state: MatchState, step: number): number {
 /** Opponent pawns this seat could capture next turn from `step`. */
 function targets(state: MatchState, step: number): number {
   const seat = state.turn.seat;
-  const here = trackIndexAt(seat, step);
+  const here = trackIndexIn(state, seat, step);
   if (here === null) return 0;
   let count = 0;
   for (const other of state.seats) {
     if (other === seat) continue;
     for (const theirStep of state.pawns[other]!) {
-      const there = trackIndexAt(other, theirStep);
-      if (there === null || TRACK[there]!.safe) continue;
-      const gap = (there - here + TRACK_LENGTH) % TRACK_LENGTH;
-      if (gap >= 1 && gap <= 6 && step + gap <= LAST_SHARED_STEP) count++;
+      const there = trackIndexIn(state, other, theirStep);
+      if (there === null || isSafeTrackIndex(there)) continue;
+      const gap = (there - here + shapeOf(state).trackLength) % shapeOf(state).trackLength;
+      if (gap >= 1 && gap <= 6 && step + gap <= shapeOf(state).lastSharedStep) count++;
     }
   }
   return count;
@@ -89,12 +89,12 @@ function targets(state: MatchState, step: number): number {
 
 function score(state: MatchState, move: LegalMove, w: Weights): number {
   const seat = state.turn.seat;
-  const landing = trackIndexAt(seat, move.to);
+  const landing = trackIndexIn(state, seat, move.to);
   let total = (move.to - Math.max(move.from, 0)) * w.progress + move.to * w.progress * 0.2;
   for (const c of move.captures) total += w.capture + state.pawns[c.seat]![c.pawn]! * 0.5;
   if (move.finishes) total += w.finish;
   if (move.from === YARD) total += w.enter;
-  if (landing === null || TRACK[landing]!.safe) total += w.safe;
+  if (landing === null || isSafeTrackIndex(landing)) total += w.safe;
   // A pawn far along the path is worth more, so risking it costs more.
   total -= threats(state, move.to) * (w.risk + move.to * w.risk * 0.03);
   if (move.from >= 0) total += threats(state, move.from) * (w.escape + move.from * w.escape * 0.03);

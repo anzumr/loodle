@@ -8,10 +8,14 @@ import {
   SEAT_NAMES,
   TRACK,
   YARD_ORIGINS,
-  pathForSeat,
+  boardLayout,
+  rotatePoint,
+  seatPathPoints,
   yardSpots,
+  type BoardLayout,
   type BoardNode,
   type Cell,
+  type Point,
   type Seat,
 } from '@loodl/rules';
 
@@ -26,13 +30,27 @@ export interface MatchView {
   seat: Seat;
   /** Pawns of that seat that may be tapped to move right now. */
   movable: number[];
+  /** Arms on the board: 4 (classic, the default) to 8. */
+  boardSeats?: number;
 }
 
-const SEAT_HEX = [0xe5262f, 0x14a44f, 0xf8c21c, 0x1c96ee] as const;
-const SEAT_DARK = [0xa3121a, 0x0b7436, 0xc28a05, 0x0f67b0] as const;
-const CREAM = 0xf7f2e6;
-const GOLD = 0xe2a92b;
-const BED = 0x1b2550;
+const SEAT_HEX = [0xe5262f, 0x14a44f, 0xf8c21c, 0x1c96ee, 0x8e44d6, 0xf07a1a, 0x12b5a6, 0xe84aa0] as const;
+const SEAT_DARK = [0xa3121a, 0x0b7436, 0xc28a05, 0x0f67b0, 0x5b2aa8, 0xb3540a, 0x0c7a70, 0xa3206c] as const;
+const ALL_SEATS: readonly Seat[] = [0, 1, 2, 3, 4, 5, 6, 7];
+/** Board skins: tile, trim and bed colours. Cosmetic only. */
+const BOARD_SKINS: Record<string, [tile: number, trim: number, bed: number]> = {
+  board_classic: [0xf7f2e6, 0xe2a92b, 0x1b2550],
+  board_midnight: [0xdfe6ff, 0x9fb2d6, 0x080d22],
+  board_royal: [0xfff3d6, 0xd49a1a, 0x4a1030],
+};
+/** Pawn finishes: surface properties only; seat colours never change. */
+const PAWN_SKINS: Record<string, { metalness: number; roughness: number; clearcoat: number; clearcoatRoughness: number }> = {
+  pawn_glossy: { metalness: 0, roughness: 0.18, clearcoat: 1, clearcoatRoughness: 0.08 },
+  pawn_metal: { metalness: 0.85, roughness: 0.32, clearcoat: 0.3, clearcoatRoughness: 0.3 },
+  pawn_pearl: { metalness: 0.25, roughness: 0.55, clearcoat: 0.6, clearcoatRoughness: 0.5 },
+};
+// The equipped skin is a player preference shared by every board on the page.
+let [CREAM, GOLD, BED] = BOARD_SKINS.board_classic!;
 
 const TILE_TOP = 0.2;
 const YARD_TOP = 0.34;
@@ -86,6 +104,14 @@ export class BoardScene {
   private rings: THREE.Mesh[] = [];
   private pawns: THREE.Group[][] = [];
   private view: MatchView | null = null;
+  private pawnMats: THREE.MeshPhysicalMaterial[] = [];
+  private pawnRingMat: THREE.MeshPhysicalMaterial | null = null;
+  private layout: BoardLayout = boardLayout(4);
+  private paths: Point[][] = [];
+  /** Everything that makes up the board itself, so it can be swapped for another size. */
+  private board = new THREE.Group();
+  /** Half-width the camera must fit. */
+  private extent = 9.1;
   private die = new THREE.Group();
   private resizeObserver: ResizeObserver;
   private clock = new THREE.Clock();
@@ -127,6 +153,7 @@ export class BoardScene {
     rim.position.set(-8, 6, -10);
     this.scene.add(rim);
 
+    this.scene.add(this.board);
     this.buildBoard();
     this.buildPawns();
     this.buildDie();
@@ -165,11 +192,107 @@ export class BoardScene {
   private add(mesh: THREE.Mesh, cast = true, receive = true) {
     mesh.castShadow = cast;
     mesh.receiveShadow = receive;
-    this.scene.add(mesh);
+    this.board.add(mesh);
     return mesh;
   }
 
+  /** Swap the board for one with a different number of arms. */
+  private setLayout(boardSeats: number) {
+    for (const child of [...this.board.children]) {
+      const mesh = child as THREE.Mesh;
+      mesh.geometry?.dispose();
+      const m = mesh.material;
+      if (Array.isArray(m)) m.forEach((x) => x.dispose());
+      else m?.dispose();
+      this.board.remove(child);
+    }
+    this.layout = boardLayout(boardSeats);
+    this.paths = [];
+    if (boardSeats === 4) this.buildBoard();
+    else this.buildStarBoard();
+    this.layoutPawns(false);
+    if (this.transition) this.transition.to = this.poseFor(this.mode);
+    else {
+      this.applySpherical(this.poseFor(this.mode));
+      if (this.mode !== 'lobby') this.finishTransition();
+    }
+  }
+
+  /** Boards for five to eight players: one arm each around a central polygon, with a home wedge between arms. */
+  private buildStarBoard() {
+    const L = this.layout;
+    const n = L.boardSeats;
+    const at = (x: number, z: number, angle: number): [number, number] => {
+      const p = rotatePoint({ x, z }, angle);
+      return [p.x, p.z];
+    };
+    const grow = (pts: [number, number][], k: number) => pts.map(([x, z]) => [x * k, z * k] as [number, number]);
+    // Outline through the outer corners of every arm, clockwise.
+    const outline = L.armAngles.flatMap((a) => [at(-L.radius, 1.5, a), at(-L.radius, -1.5, a)]);
+    this.extent = Math.hypot(L.radius, 1.5) * 1.07 + 0.9;
+
+    const gold = new THREE.MeshPhysicalMaterial({ color: GOLD, metalness: 0.95, roughness: 0.28, clearcoat: 0.4 });
+    this.add(new THREE.Mesh(flat(grow(outline, 1.07), 0.6, 0.06), gold)).position.y = -0.7;
+    this.add(new THREE.Mesh(flat(grow(outline, 1.02), 0.16, 0.02), glossy(BED, { roughness: 0.6 }))).position.y = -0.17;
+    const floor = this.add(new THREE.Mesh(new THREE.CircleGeometry(48, 48), new THREE.ShadowMaterial({ opacity: 0.38 })), false);
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = -0.72;
+
+    const seatMats = SEAT_HEX.map((c) => glossy(c));
+    const cream = glossy(CREAM, { roughness: 0.45, clearcoat: 0.35 });
+    const tileGeo = new RoundedBoxGeometry(0.93, TILE_TOP, 0.93, 4, 0.07);
+    const starGeo = flat(starPoints(0.3, 0.13), 0.02, 0.01);
+    const starMat = new THREE.MeshStandardMaterial({ color: 0x8e99b3, roughness: 0.5, metalness: 0.3 });
+    const arrowGeo = flat(
+      [
+        [-0.28, -0.07],
+        [0.02, -0.07],
+        [0.02, -0.22],
+        [0.3, 0],
+        [0.02, 0.22],
+        [0.02, 0.07],
+        [-0.28, 0.07],
+      ],
+      0.02,
+      0.008,
+    );
+    const put = (mesh: THREE.Mesh, p: Point, y: number, angle: number) => {
+      mesh.position.set(p.x, y, p.z);
+      mesh.rotation.y = -angle; // three.js turns the other way round from the layout's angles
+      return mesh;
+    };
+
+    L.track.forEach((p, i) => {
+      const block = Math.floor(i / 13);
+      const offset = i % 13;
+      // The first five squares of a seat's stretch lie on its own arm, the rest on the next arm.
+      const arm = offset < 5 ? block : (block + 1) % n;
+      const angle = L.armAngles[arm]!;
+      put(this.add(new THREE.Mesh(tileGeo, offset === 0 ? seatMats[block]! : cream)), p, TILE_TOP / 2, angle);
+      if (offset === 8) put(this.add(new THREE.Mesh(starGeo, starMat), false), p, TILE_TOP, 0);
+      if (offset === 11) put(this.add(new THREE.Mesh(arrowGeo, glossy(SEAT_DARK[arm]!)), false), p, TILE_TOP, angle);
+    });
+    L.lanes.forEach((lane, seat) => lane.forEach((p) => put(this.add(new THREE.Mesh(tileGeo, seatMats[seat]!)), p, TILE_TOP / 2, L.armAngles[seat]!)));
+
+    const spotGeo = new THREE.CylinderGeometry(0.52, 0.52, 0.05, 36);
+    L.armAngles.forEach((angle, seat) => {
+      const next = L.armAngles[(seat + 1) % n]!;
+      // Centre finish: one triangle per seat, fed by that seat's lane.
+      this.add(new THREE.Mesh(flat([at(-L.hubRadius, 1.47, angle), at(-L.hubRadius, -1.47, angle), [0, 0]], 0.26, 0.03), seatMats[seat]!));
+      // Home wedge between this arm and the next, widest at the outer edge.
+      const wedge: [number, number][] = [at(-L.hubRadius, -1.5, angle), at(-L.radius, -1.5, angle), at(-L.radius, 1.5, next)];
+      const cx = (wedge[0]![0] + wedge[1]![0] + wedge[2]![0]) / 3;
+      const cz = (wedge[0]![1] + wedge[1]![1] + wedge[2]![1]) / 3;
+      const inset = (k: number) => wedge.map(([x, z]) => [cx + (x - cx) * k, cz + (z - cz) * k] as [number, number]);
+      this.add(new THREE.Mesh(flat(inset(0.965), YARD_TOP - 0.04, 0.04), seatMats[seat]!));
+      this.add(new THREE.Mesh(flat(inset(0.8), 0.05, 0.03), cream)).position.y = YARD_TOP + 0.01;
+      const spotMat = glossy(SEAT_HEX[seat]!, { roughness: 0.5 });
+      for (const spot of L.yardSpots[seat]!) this.add(new THREE.Mesh(spotGeo, spotMat), false).position.set(spot.x, YARD_TOP + 0.1, spot.z);
+    });
+  }
+
   private buildBoard() {
+    this.extent = 9.1;
     const gold = new THREE.MeshPhysicalMaterial({ color: GOLD, metalness: 0.95, roughness: 0.28, clearcoat: 0.4 });
     const frame = this.add(new THREE.Mesh(new RoundedBoxGeometry(16.5, 0.7, 16.5, 6, 0.32), gold));
     frame.position.y = -0.37;
@@ -276,9 +399,11 @@ export class BoardScene {
     const headGeo = new THREE.SphereGeometry(0.2, 32, 24);
     const ringGeo = new THREE.TorusGeometry(0.31, 0.04, 12, 40);
     const ringMat = new THREE.MeshPhysicalMaterial({ color: GOLD, metalness: 1, roughness: 0.25 });
-    for (const seat of SEATS) {
+    this.pawnRingMat = ringMat;
+    for (const seat of ALL_SEATS) {
       const mat = glossy(SEAT_HEX[seat], { roughness: 0.18, clearcoat: 1, clearcoatRoughness: 0.08 });
-      this.pawns[seat] = yardSpots(seat).map(() => {
+      this.pawnMats[seat] = mat;
+      this.pawns[seat] = [0, 1, 2, 3].map(() => {
         const pawn = new THREE.Group();
         const body = new THREE.Mesh(bodyGeo, mat);
         const head = new THREE.Mesh(headGeo, mat);
@@ -302,31 +427,46 @@ export class BoardScene {
   /** Show a match, or pass null for the idle board with every pawn in its yard. */
   setView(view: MatchView | null) {
     this.view = view;
-    this.layoutPawns(true);
+    const boardSeats = view?.boardSeats ?? 4;
+    if (boardSeats !== this.layout.boardSeats) this.setLayout(boardSeats);
+    else this.layoutPawns(true);
+  }
+
+  private at(p: Point, y: number) {
+    return new THREE.Vector3(p.x, y, p.z);
+  }
+
+  /** Where a waiting pawn stands: the classic square yards on the four-seat board, the wedges otherwise. */
+  private yardPoint(seat: Seat, pawn: number): THREE.Vector3 {
+    if (this.layout.boardSeats === 4) return toWorld(yardSpots(seat)[pawn]!, YARD_TOP + 0.125);
+    return this.at(this.layout.yardSpots[seat]![pawn]!, YARD_TOP + 0.125);
   }
 
   /** Where each pawn should stand, spreading out pawns that share a square. */
   private layoutPawns(animate: boolean) {
     const sharing = new Map<string, number>();
-    const slots: { pawn: THREE.Group; pos: THREE.Vector3; scale: number; key?: string; step: number; path: readonly BoardNode[] }[] = [];
-    for (const seat of SEATS) {
-      const steps = this.view ? (this.view.pawns[seat] ?? []) : [-1, -1, -1, -1];
-      const path = pathForSeat(seat);
+    const slots: { pawn: THREE.Group; pos: THREE.Vector3; scale: number; key?: string; step: number; path: Point[] }[] = [];
+    const onBoard = this.layout.boardSeats;
+    for (const seat of ALL_SEATS) {
+      // Seats that do not exist on this board have no pawns to show.
+      const steps = seat >= onBoard ? [] : this.view ? (this.view.pawns[seat] ?? []) : [-1, -1, -1, -1];
+      const path = seat >= onBoard ? [] : (this.paths[seat] ??= seatPathPoints(this.layout, seat));
       this.pawns[seat]!.forEach((pawn, i) => {
         const step = steps[i];
         pawn.visible = step !== undefined;
         if (step === undefined) return;
         if (step < 0) {
-          slots.push({ pawn, pos: toWorld(yardSpots(seat)[i]!, YARD_TOP + 0.125), scale: 1.25, step, path });
+          slots.push({ pawn, pos: this.yardPoint(seat, i), scale: this.layout.boardSeats === 4 ? 1.25 : 1.1, step, path });
         } else if (step >= path.length - 1) {
           // Home: line up inside the seat's own centre triangle.
-          const lane = toWorld(LANES[seat]![4]!).normalize();
+          const lane = this.at(this.layout.lanes[seat]![4]!, 0).normalize();
           const side = new THREE.Vector3(-lane.z, 0, lane.x).multiplyScalar((i - 1.5) * 0.36);
-          slots.push({ pawn, pos: lane.multiplyScalar(0.95).add(side).setY(0.29), scale: 0.72, step, path });
+          slots.push({ pawn, pos: lane.multiplyScalar(Math.max(0.95, this.layout.hubRadius * 0.55)).add(side).setY(0.29), scale: 0.72, step, path });
         } else {
           const node = path[step]!;
-          sharing.set(node.id, (sharing.get(node.id) ?? 0) + 1);
-          slots.push({ pawn, pos: toWorld(node, TILE_TOP), scale: 1.1, key: node.id, step, path });
+          const id = `${node.x.toFixed(2)},${node.z.toFixed(2)}`;
+          sharing.set(id, (sharing.get(id) ?? 0) + 1);
+          slots.push({ pawn, pos: this.at(node, TILE_TOP), scale: 1.1, key: id, step, path });
         }
       });
     }
@@ -354,7 +494,7 @@ export class BoardScene {
         // Moving forward along the path: hop through every square on the way.
         const through =
           previous !== undefined && previous >= 0 && step > previous
-            ? path.slice(previous + 1, step).map((n) => toWorld(n, TILE_TOP))
+            ? path.slice(previous + 1, step).map((n) => this.at(n, TILE_TOP))
             : [];
         pawn.userData.anim = { points: [pawn.position.clone(), ...through, pos], s0: pawn.scale.x, s1: scale, t: 0 } satisfies PawnAnim;
       }
@@ -409,7 +549,7 @@ export class BoardScene {
     // In play, keep the board clear of the HUD bars at the top and bottom.
     const h = this.container.clientHeight || 1;
     const usable = this.mode === 'lobby' ? 1 : (h - (h < 500 ? 110 : 300)) / h;
-    return 9.1 / (tan * Math.min(usable, aspect));
+    return this.extent / (tan * Math.min(usable, aspect));
   }
 
   private poseFor(mode: CameraMode): THREE.Spherical {
@@ -488,6 +628,17 @@ export class BoardScene {
     }
     if (best >= 0) this.onPawnTap(best);
   };
+
+  /** Apply the player's equipped board skin and pawn finish. Looks only; nothing about play changes. */
+  setSkin(board: string, pawn: string) {
+    const colours = BOARD_SKINS[board] ?? BOARD_SKINS.board_classic!;
+    const changed = colours[0] !== CREAM || colours[1] !== GOLD || colours[2] !== BED;
+    [CREAM, GOLD, BED] = colours;
+    const finish = PAWN_SKINS[pawn] ?? PAWN_SKINS.pawn_glossy!;
+    for (const mat of this.pawnMats) Object.assign(mat, finish);
+    this.pawnRingMat?.color.setHex(GOLD);
+    if (changed) this.setLayout(this.layout.boardSeats);
+  }
 
   setQuality(q: Quality) {
     const high = q === 'high';
