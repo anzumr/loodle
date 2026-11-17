@@ -25,10 +25,11 @@ import { AccountPanel, type Account } from './ui/AccountPanel';
 import { play, setSoundEnabled, type Sfx } from './sound';
 import { COSMETICS, buyCosmetic, equipCosmetic, sanitizeWardrobe, type Wardrobe } from '@loodl/rules';
 import { chooseLegalMove, diceLeft } from '@loodl/rules';
+import { WAGER_STAKES, canWager, wagerMultiplier } from '@loodl/rules';
 import { ACHIEVEMENTS, AVATAR_COUNT, applyMatch, challengesFor, cleanAvatar, levelFor, sanitizeProgress, validateUsername, type Progress, type Reward } from '@loodl/rules';
 import { AVATAR_NAMES, Avatar } from './ui/Avatar';
 import { connect, playerToken, rememberedRoom, rememberRoom, type Connection, type ConnectionStatus, type RoomView, type ServerMessage } from './net';
-import { Back, Chest, Chevron, Crown, Gear, Pawn, People } from './ui/icons';
+import { Back, Chest, Chevron, Crown, Gear, LinkIcon, Pawn, People } from './ui/icons';
 
 type Screen = 'lobby' | 'board';
 type View = Exclude<CameraMode, 'lobby'>;
@@ -65,18 +66,32 @@ const SOUND_KEY = 'loodl.sound';
 /** Named computer rivals, one per difficulty. */
 const RIVALS: Record<AiLevel, string> = { beginner: 'Pip', easy: 'Dot', medium: 'Rook', hard: 'Vex', expert: 'Sable' };
 
+/** Coins staked on the current solo match, and what a win multiplies them by (fixed at the start). */
+interface Wager {
+  stake: number;
+  multiplier: number;
+}
+
 interface Saved {
   match: MatchState;
   humans: Seat[];
   level: AiLevel;
+  wager?: Wager | null;
 }
+
+const validWager = (w: unknown): Wager | null => {
+  const v = w as Partial<Wager> | null;
+  return v && typeof v.stake === 'number' && v.stake > 0 && typeof v.multiplier === 'number' && v.multiplier > 1 && v.multiplier <= 10
+    ? { stake: Math.floor(v.stake), multiplier: v.multiplier }
+    : null;
+};
 
 function loadSaved(): Saved | null {
   try {
-    const raw = JSON.parse(localStorage.getItem(SAVE_KEY) ?? 'null') as { match: string; humans: Seat[]; level: AiLevel } | null;
+    const raw = JSON.parse(localStorage.getItem(SAVE_KEY) ?? 'null') as { match: string; humans: Seat[]; level: AiLevel; wager?: unknown } | null;
     if (!raw || !Array.isArray(raw.humans) || !AI_LEVELS.includes(raw.level)) return null;
     const match = deserializeMatch(raw.match);
-    return match.turn.phase === 'over' ? null : { match, humans: raw.humans, level: raw.level };
+    return match.turn.phase === 'over' ? null : { match, humans: raw.humans, level: raw.level, wager: validWager(raw.wager) };
   } catch {
     return null;
   }
@@ -124,6 +139,24 @@ function describe(events: GameEvent[]): string {
   return '';
 }
 
+/**
+ * Room code from an invite link (loodle.online/?join=CODE), read once when the page
+ * loads. The code is then removed from the address bar so a reload doesn't rejoin.
+ */
+const INVITE_CODE: string | null = (() => {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has('join')) return null;
+    const code = (params.get('join') ?? '').trim().toUpperCase();
+    params.delete('join');
+    const rest = params.toString();
+    window.history.replaceState(null, '', window.location.pathname + (rest ? `?${rest}` : '') + window.location.hash);
+    return /^[A-Z0-9]{5}$/.test(code) ? code : null;
+  } catch {
+    return null;
+  }
+})();
+
 /** A computer or timed-out move, including which die to use in two-dice games. */
 const pickMove = (match: MatchState, level: AiLevel) => {
   const m = chooseLegalMove(match, level, Math.random);
@@ -161,6 +194,11 @@ export function App() {
   const [solo, setSolo] = useState(true);
   const [level, setLevel] = useState<AiLevel>(saved?.level ?? 'medium');
   const [humans, setHumans] = useState<Seat[]>(saved?.humans ?? [0]);
+  /** Stake picked in the mode menu for the next solo match. */
+  const [stake, setStake] = useState(0);
+  /** Wager on the solo match in play, already paid out of coins. */
+  const [wager, setWager] = useState<Wager | null>(saved?.wager ?? null);
+  const [wagerResult, setWagerResult] = useState<{ stake: number; payout: number } | null>(null);
   const [sound, setSound] = useState(() => {
     try {
       return localStorage.getItem(SOUND_KEY) !== 'off';
@@ -169,6 +207,9 @@ export function App() {
     }
   });
   const [match, setMatch] = useState<MatchState | null>(saved?.match ?? null);
+  /** The match currently in play, for timers that finish after it may have changed. */
+  const matchRef = useRef(match);
+  matchRef.current = match;
   const [message, setMessage] = useState('');
   const [face, setFace] = useState(6);
   const [face2, setFace2] = useState(6);
@@ -214,6 +255,32 @@ export function App() {
     }
   };
   const [code, setCode] = useState('');
+  /** Feedback after sharing an invite ("Link copied!"), cleared after a moment. */
+  const [inviteNote, setInviteNote] = useState('');
+  const shareInvite = async (roomCode: string) => {
+    const url = `${window.location.origin}/?join=${roomCode}`;
+    const say = (note: string) => {
+      setInviteNote(note);
+      window.setTimeout(() => setInviteNote(''), 2500);
+    };
+    // Phones get the system share sheet; elsewhere the link goes on the clipboard.
+    if (navigator.share && matchMedia('(pointer: coarse)').matches) {
+      try {
+        await navigator.share({ title: 'Play LOODL with me', text: `Join my LOODL room ${roomCode}`, url });
+        return;
+      } catch (e) {
+        if ((e as DOMException).name === 'AbortError') return;
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      say('Link copied!');
+    } catch {
+      // Clipboard blocked: show the link so it can be copied by hand.
+      setInviteLink(url);
+    }
+  };
+  const [inviteLink, setInviteLink] = useState('');
   const [progress, setProgress] = useState<Progress>(() => {
     try {
       return sanitizeProgress(JSON.parse(localStorage.getItem('loodl.progress') ?? 'null'));
@@ -284,6 +351,7 @@ export function App() {
     if (offlineMatch.current) {
       setHumans(offlineMatch.current.humans);
       setLevel(offlineMatch.current.level);
+      setWager(offlineMatch.current.wager ?? null);
     }
     setScreen('lobby');
   };
@@ -299,7 +367,8 @@ export function App() {
   /** Create a room, or join one by code. The server owns the match from here on. */
   const enterRoom = (first: { t: 'create' | 'quick'; variant: string; dice: 1 | 2 } | { t: 'join'; code: string }) => {
     setNetError('');
-    if (!networkSession) offlineMatch.current = match ? { match, humans, level } : null;
+    if (!networkSession) offlineMatch.current = match ? { match, humans, level, wager } : null;
+    setWager(null);
     setNetworkSession(true);
     try {
       localStorage.setItem('loodl.name', name);
@@ -352,7 +421,8 @@ export function App() {
   };
 
   useEffect(() => {
-    const previousRoom = rememberedRoom();
+    // An invite link (?join=CODE) wins over a room remembered from last time.
+    const previousRoom = INVITE_CODE ?? rememberedRoom();
     if (previousRoom) {
       setCode(previousRoom);
       setSheet('friends');
@@ -408,6 +478,8 @@ export function App() {
     const value = rollDie();
     const value2 = match.config.dice === 2 ? rollDie() : undefined;
     window.setTimeout(() => {
+      // The match may have been quit or replaced during the roll animation.
+      if (matchRef.current !== match) return setRolling(false);
       setFace(value);
       if (value2 !== undefined) setFace2(value2);
       setPickedDie(null);
@@ -539,12 +611,12 @@ export function App() {
   useEffect(() => {
     if (networkSession) return; // online matches live on the server; preserve the offline save
     try {
-      if (match && match.turn.phase !== 'over') localStorage.setItem(SAVE_KEY, JSON.stringify({ match: serializeMatch(match), humans, level }));
+      if (match && match.turn.phase !== 'over') localStorage.setItem(SAVE_KEY, JSON.stringify({ match: serializeMatch(match), humans, level, wager }));
       else localStorage.removeItem(SAVE_KEY);
     } catch {
       /* storage unavailable: the match just won't survive a reload */
     }
-  }, [match, humans, level, networkSession]);
+  }, [match, humans, level, networkSession, wager]);
 
   useEffect(() => {
     setSoundEnabled(sound);
@@ -572,6 +644,15 @@ export function App() {
     const fresh = createMatch({ players, config: { ...VARIANTS[variant].rules, pawnsPerPlayer: pawnCount, dice: diceCount } });
     tally.current = { captures: 0, sixes: 0 };
     setReward(null);
+    setWagerResult(null);
+    // The stake leaves your coins now; a win pays it back multiplied. Any wager on a
+    // match being replaced is lost, the same as quitting it.
+    if (solo && stake > 0 && canWager(stake, progress.coins)) {
+      const paid = { ...progress, coins: progress.coins - stake };
+      setProgress(paid);
+      store('loodl.progress', paid);
+      setWager({ stake, multiplier: wagerMultiplier(level, players) });
+    } else setWager(null);
     setHumans(solo ? [fresh.seats[0]!] : fresh.seats);
     setMatch(fresh);
     setMessage('');
@@ -590,6 +671,9 @@ export function App() {
     const seat = humans.length === 1 ? humans[0]! : null;
     const place = seat === null ? 0 : match.finishOrder.indexOf(seat) + 1;
     if (seat === null || place === 0 || match.seats.length < 2) return setReward(null);
+    const payout = !online && wager ? (place === 1 ? Math.floor(wager.stake * wager.multiplier) : 0) : 0;
+    setWagerResult(!online && wager ? { stake: wager.stake, payout } : null);
+    if (!online) setWager(null);
     const variantOf = match.config.targetScore !== null ? 'clash' : match.config.endOnFirstFinish ? 'race' : 'classic';
     const result = applyMatch(
       progress,
@@ -607,13 +691,11 @@ export function App() {
       today,
     );
     setReward(result.reward);
-    if (result.reward) {
-      setProgress(result.progress);
-      try {
-        localStorage.setItem('loodl.progress', JSON.stringify(result.progress));
-      } catch {
-        /* storage unavailable: progress lasts for this visit only */
-      }
+    if (result.reward || payout) {
+      const next = result.reward ? result.progress : progress;
+      const paid = payout ? { ...next, coins: next.coins + payout } : next;
+      setProgress(paid);
+      store('loodl.progress', paid);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [match]);
@@ -638,17 +720,20 @@ export function App() {
   const vsAi = !!match && humans.length < match.seats.length;
   const rival = (seat: Seat) => (online ? (online.room.players.find((pl) => pl.seat === seat)?.name ?? seatName(seat)) : RIVALS[level]);
   // The line under the board. On a computer's turn the colour label above already says who is playing.
-  const readout =
-    networkSession && netStatus !== 'connected'
+  // Only used on the board, but computed every render, so it must cope with no match
+  // (for example in an online waiting room).
+  const readout = !match
+    ? ''
+    : networkSession && netStatus !== 'connected'
       ? 'Connection lost — reconnecting…'
       : (forced || !human ? message.replace(' — tap a pawn', '') : message) ||
         (!human
           ? online
-            ? online.room.players.find((pl) => pl.seat === match?.turn.seat)?.connected === false
-              ? `${rival(match!.turn.seat)} left — a bot is playing for them`
-              : `Waiting for ${rival(match!.turn.seat)}…`
+            ? online.room.players.find((pl) => pl.seat === match.turn.seat)?.connected === false
+              ? `${rival(match.turn.seat)} left — a bot is playing for them`
+              : `Waiting for ${rival(match.turn.seat)}…`
             : ''
-          : match?.turn.phase === 'roll'
+          : match.turn.phase === 'roll'
             ? 'Roll the die'
             : 'Tap a pawn');
   const who = (seat: Seat) => (!vsAi ? seatName(seat) : humans.includes(seat) ? 'You' : rival(seat));
@@ -755,6 +840,11 @@ export function App() {
                   {seatName(turn.seat)} is {turn.phase === 'roll' ? 'rolling' : 'moving'}
                   {human && (vsAi || online) ? ' (you)' : ''}
                 </div>
+                {wager && !online && (
+                  <span className="wager-chip" title="Coins at stake on this match">
+                    {wager.stake} at stake · win {Math.floor(wager.stake * wager.multiplier)}
+                  </span>
+                )}
                 {!humansDone && (
                   <button className={`auto-toggle ${autoRoll ? 'on' : ''}`} role="switch" aria-checked={autoRoll} onClick={toggleAutoRoll}>
                     <span className="knob" aria-hidden="true" />
@@ -839,6 +929,12 @@ export function App() {
             ) : (
               humans.length !== 1 && <p className="hint">Pass &amp; Play matches don’t earn XP or coins.</p>
             )}
+            {wagerResult && (
+              <div className={`setting wager-result ${wagerResult.payout ? 'won' : 'lost'}`} aria-live="polite">
+                <strong>{wagerResult.payout ? `Wager won: +${wagerResult.payout} coins` : `Wager lost: −${wagerResult.stake} coins`}</strong>
+                <small>Staked {wagerResult.stake}</small>
+              </div>
+            )}
             {match.finishOrder.map((seat, i) => (
               <div className="setting" key={seat}>
                 <span className={`place seat-${SEAT_NAMES[seat]}`}>
@@ -890,10 +986,10 @@ export function App() {
                   <small>Resume this match later from Play</small>
                 </span>
               </button>
-              <button className="mode" onClick={() => (setSheet(null), setMatch(null), setScreen('lobby'))}>
+              <button className="mode" onClick={() => (setSheet(null), setMatch(null), setWager(null), setScreen('lobby'))}>
                 <span>
                   <strong>Quit match</strong>
-                  <small>End this match without saving</small>
+                  <small>{wager ? `End this match and lose your ${wager.stake}-coin wager` : 'End this match without saving'}</small>
                 </span>
               </button>
             </>
@@ -991,11 +1087,42 @@ export function App() {
               </div>
             </div>
           )}
-          <button className={`mode ${match && match.turn.phase !== 'over' ? '' : 'on'}`} onClick={startMatch}>
+          {solo && (
+            <div className="setting stacked">
+              <span>
+                <strong>Wager</strong>
+                <small>
+                  {stake > 0
+                    ? `Stake ${stake} coins · win to get ${Math.floor(stake * wagerMultiplier(level, players))} back (×${wagerMultiplier(level, players)}) · lose it otherwise`
+                    : `No wager · you have ${progress.coins} coins`}
+                </small>
+              </span>
+              <div className="segmented compact wide" role="group" aria-label="Wager in coins">
+                {WAGER_STAKES.map((n) => (
+                  <button
+                    key={n}
+                    className={stake === n ? 'on' : ''}
+                    aria-pressed={stake === n}
+                    disabled={!canWager(n, progress.coins)}
+                    onClick={() => setStake(n)}
+                  >
+                    {n === 0 ? 'None' : n >= 1000 ? `${n / 1000}k` : n}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          <button
+            className={`mode ${match && match.turn.phase !== 'over' ? '' : 'on'}`}
+            disabled={solo && !canWager(stake, progress.coins)}
+            onClick={startMatch}
+          >
             <span>
               <strong>Start new match</strong>
               <small>
                 {VARIANTS[variant].label} · {players} players{solo ? ` · ${level}` : ''}
+                {solo && stake > 0 ? ` · ${stake}-coin wager` : ''}
+                {match && match.turn.phase !== 'over' && wager ? ` · your current ${wager.stake}-coin wager is lost` : ''}
               </small>
             </span>
             <Chevron />
@@ -1086,11 +1213,28 @@ export function App() {
                   <small>6 seconds to roll, 12 to move, then automatic play</small>
                 </div>
               ) : (
-                <div className="setting stacked room-code">
-                  <small>Share this code</small>
-                  <strong>{online.room.code}</strong>
-                  <small>6 seconds to roll, 12 to move, then automatic play</small>
-                </div>
+                <>
+                  <div className="setting stacked room-code">
+                    <small>Share this code</small>
+                    <strong>{online.room.code}</strong>
+                    <small>6 seconds to roll, 12 to move, then automatic play</small>
+                  </div>
+                  {!online.room.match && (
+                    <button className="mode on" onClick={() => void shareInvite(online.room.code)}>
+                      <span>
+                        <strong>{inviteNote || 'Copy invite link'}</strong>
+                        <small>Anyone who opens the link joins this room</small>
+                      </span>
+                      <LinkIcon />
+                    </button>
+                  )}
+                  {!online.room.match && inviteLink.endsWith(online.room.code) && (
+                    <label className="setting stacked">
+                      <small>Copy this link and send it to your friends</small>
+                      <input className="invite-link" readOnly value={inviteLink} onFocus={(e) => e.currentTarget.select()} autoFocus />
+                    </label>
+                  )}
+                </>
               )}
               {online.room.players.map((pl, i) => (
                 <div className="setting" key={i}>

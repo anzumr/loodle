@@ -51,6 +51,16 @@ Picked per match (Dice: 1 or 2 in the mode menu); setting `dice: 2`. Works with 
 - **A third double in a row ends the turn at once with no move**, earlier moves standing. This mirrors the locked three-sixes rule; the one-die game is unchanged.
 - Measured with medium AI, two dice make matches shorter: at 4 players about 78 rolls each instead of 139.
 
+## Coin wagers (solo only)
+
+Code: `packages/rules/src/wager.ts`. Picked in the mode menu for solo matches against the computer: none, 25, 50, 100, 250, 500 or 1,000 coins, up to what you have.
+
+- The stake is taken from your coins when the match starts and is saved with the match, so Save and exit keeps it.
+- Winning (1st place) pays back stake × multiplier. Any other place, quitting, or starting a new match over it loses the stake.
+- Multiplier: Beginner 1.2, Easy 1.5, Medium 2, Hard 2.5, Expert 3, plus 0.5 per opponent beyond the first (Medium with 4 players pays ×3).
+- Coins are earned only by playing and are stored on the device. Not available online until accounts have a server-side database; wagering between people would need the server to hold the coins.
+- If coins ever become purchasable with real money, wagering them may fall under gambling rules and must be reviewed first.
+
 ## Quick modes (proposed definitions, awaiting approval)
 
 Both use the classic board and all classic rules, and start each player with one pawn already on its start square.

@@ -1,6 +1,7 @@
 {
   "version": "0.0.1",
   "configurations": [
-    { "name": "loodl-web", "runtimeExecutable": "npm", "runtimeArgs": ["run", "dev"], "port": 5173 }
+    { "name": "loodl-web", "runtimeExecutable": "npm", "runtimeArgs": ["run", "dev"], "port": 5173 },
+    { "name": "loodl-server", "runtimeExecutable": "npm", "runtimeArgs": ["run", "dev", "-w", "@loodl/server"], "port": 8787 }
   ]
 }
