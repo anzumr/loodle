@@ -19,7 +19,7 @@ Code: `packages/rules/src/engine.ts`. Tests: `packages/rules/test/engine.test.ts
 | `bonusOnCapture` | on | off |
 | `bonusOnFinish` | **on** (owner request, 2026-11-17): bringing a pawn home grants another roll | off |
 | `stackBonuses` | **off**: a six that also captures earns one extra roll | on: it earns two |
-| `blockades` | on: two friendly pawns on a shared square stop opponents landing on or passing it | off: no blocking, and a pawn landing there captures both |
+| `blockades` (safe pairs) | **on** (owner request, 2026-11-17): two or more pawns of one colour on a shared square cannot be captured. They never block: opponents may pass or share the square | off: a pawn landing there captures them all |
 
 ## Interpretations I chose where the handoff was silent
 
@@ -28,8 +28,8 @@ These are implemented as fixed behaviour today. Each is a single small change if
 1. **Safe squares are the four start squares and the four stars.** Nothing is ever captured there, including an opponent sitting on your start square when you enter. Different colours can share a safe square.
 2. **A six with no legal move still grants another roll** (and counts toward three sixes).
 3. **A capture's extra roll after a non-six starts the six count from zero.** Only sixes rolled back to back count.
-4. **A blockade on your start square stops you entering.** Your own blockades never block you, and a third pawn may join one.
-5. **Home lanes are private.** No captures or blockades there.
+4. **Nothing blocks movement.** A pawn may enter, pass or land beside an opposing safe pair. A lone pawn of a third colour on that square can still be captured.
+5. **Home lanes are private.** No captures there.
 6. **A player who brings their last pawn home stops rolling**, even if that move was a six. Play continues for the others until one player is left; that player takes last place.
 7. **Two-player matches seat red and yellow** (opposite corners). Three players use red, green, yellow.
 

@@ -18,12 +18,13 @@ describe('guided tutorial', () => {
     finish(index, true);
   });
 
-  it('demonstrates capture, safety, blockades and exact finishing', () => {
+  it('demonstrates capture, safety, safe pairs and exact finishing', () => {
     expect(finish(2).match.pawns[2]![0]).toBe(-1);
     expect(finish(2).match.turn.seat).toBe(0);
     expect(finish(3).match.pawns[2]![0]).toBe(34);
     expect(finish(3).match.pawns[0]![0]).toBe(8);
-    expect(finish(4).match.pawns[0]![0]).toBe(2);
+    expect(finish(4).match.pawns[0]![0]).toBe(4);
+    expect(finish(4).match.pawns[2]).toEqual([30, 30, -1, -1]);
     expect(finish(4).match.turn.seat).toBe(2);
     expect(finish(5).match.pawns[0]![0]).toBe(55);
     expect(finish(6).match.pawns[0]![0]).toBe(56);

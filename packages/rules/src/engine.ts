@@ -27,7 +27,11 @@ export interface RulesConfig {
   bonusOnFinish: boolean;
   /** If one move earns several bonuses (e.g. a six that captures), grant each. */
   stackBonuses: boolean;
-  /** Two friendly pawns on a shared square block opponents from landing or passing. */
+  /**
+   * Safe pairs: two or more pawns of one colour on a shared square cannot be captured.
+   * Opponents may still pass or share the square. Off: a pawn landing there captures them all.
+   * (The key keeps its old name so saved matches still load.)
+   */
   blockades: boolean;
   /** Arms on the board: 4 is the classic board, 5-8 the larger star boards. */
   boardSeats: number;
@@ -217,8 +221,16 @@ const pawnsOn = (state: MatchState, seat: Seat, trackIndex: number): number[] =>
 
 const opponentsOf = (state: MatchState, seat: Seat) => state.seats.filter((s) => s !== seat);
 
-const blockadeAt = (state: MatchState, mover: Seat, trackIndex: number): boolean =>
-  state.config.blockades && opponentsOf(state, mover).some((s) => pawnsOn(state, s, trackIndex).length >= 2);
+/**
+ * Pawns an opponent could capture on a square. With safe pairs on, two or more pawns
+ * of one colour sharing a square protect each other; they never block anyone.
+ */
+const capturableOn = (state: MatchState, mover: Seat, trackIndex: number): PawnRef[] =>
+  opponentsOf(state, mover).flatMap((s) => {
+    const here = pawnsOn(state, s, trackIndex);
+    if (state.config.blockades && here.length >= 2) return [];
+    return here.map((p) => ({ seat: s, pawn: p }));
+  });
 
 /** Dice still waiting to be used this roll. */
 export const diceLeft = (state: MatchState): number[] =>
@@ -242,16 +254,8 @@ export function legalMoves(state: MatchState, die?: number | null): LegalMove[] 
     if (from === YARD && die !== 6) return; // a six is required to enter
     const to = from === YARD ? 0 : from + die;
     if (to > finish) return; // finishing needs the exact number
-    // Squares travelled over, then the landing square. Entering only touches the start.
-    for (let step = from === YARD ? 0 : from + 1; step <= to; step++) {
-      const idx = trackIndexIn(state, seat, step);
-      if (idx !== null && blockadeAt(state, seat, idx)) return;
-    }
     const landing = trackIndexIn(state, seat, to);
-    const captures: PawnRef[] =
-      landing === null || isSafeTrackIndex(landing)
-        ? []
-        : opponentsOf(state, seat).flatMap((s) => pawnsOn(state, s, landing).map((p) => ({ seat: s, pawn: p })));
+    const captures: PawnRef[] = landing === null || isSafeTrackIndex(landing) ? [] : capturableOn(state, seat, landing);
     moves.push({ pawn, from, to, captures, finishes: to === finish, die });
   });
   return moves;

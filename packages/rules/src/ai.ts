@@ -94,12 +94,15 @@ function score(state: MatchState, move: LegalMove, w: Weights): number {
   for (const c of move.captures) total += w.capture + state.pawns[c.seat]![c.pawn]! * 0.5;
   if (move.finishes) total += w.finish;
   if (move.from === YARD) total += w.enter;
-  if (landing === null || isSafeTrackIndex(landing)) total += w.safe;
+  // Joining one of our own pawns on the loop makes a safe pair (when that rule is on).
+  const pairs = landing !== null && state.pawns[seat]!.some((s, i) => i !== move.pawn && s === move.to);
+  const safePair = pairs && state.config.blockades;
+  if (landing === null || isSafeTrackIndex(landing) || safePair) total += w.safe;
   // A pawn far along the path is worth more, so risking it costs more.
-  total -= threats(state, move.to) * (w.risk + move.to * w.risk * 0.03);
+  if (!safePair) total -= threats(state, move.to) * (w.risk + move.to * w.risk * 0.03);
   if (move.from >= 0) total += threats(state, move.from) * (w.escape + move.from * w.escape * 0.03);
   total += targets(state, move.to) * w.chase;
-  if (landing !== null && state.pawns[seat]!.some((s, i) => i !== move.pawn && s === move.to)) total += w.blockade;
+  if (pairs) total += w.blockade;
   return total;
 }
 

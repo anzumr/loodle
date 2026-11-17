@@ -56,7 +56,7 @@ const HOW_TO_PLAY = [
   'Tap a glowing pawn to move it forward by the number you rolled.',
   'Land on an opponent to send that pawn back to its yard. You roll again.',
   'Pawns on a star or on any coloured start square are safe.',
-  'Two of your pawns on one square form a block that opponents cannot pass.',
+  'Two of your pawns on one square are a safe pair: opponents can pass or share it but cannot capture them.',
   'A six gives you another roll, but a third six in a row ends your turn with no move.',
   'Travel once around the board, up your coloured lane, and land on the centre with the exact number.',
 ];
