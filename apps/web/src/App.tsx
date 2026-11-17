@@ -266,7 +266,7 @@ export function App() {
     // Phones get the system share sheet; elsewhere the link goes on the clipboard.
     if (navigator.share && matchMedia('(pointer: coarse)').matches) {
       try {
-        await navigator.share({ title: 'Play LOODL with me', text: `Join my LOODL room ${roomCode}`, url });
+        await navigator.share({ url });
         return;
       } catch (e) {
         if ((e as DOMException).name === 'AbortError') return;

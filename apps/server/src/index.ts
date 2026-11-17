@@ -153,7 +153,7 @@ setInterval(() => {
   for (const [code, room] of rooms) if (room.empty && room.touched < cutoff) rooms.delete(code);
 }, 60_000).unref();
 
-http.listen(PORT, '0.0.0.0', () => console.log(`LOODL listening on http://localhost:${PORT} (WebSocket /ws)`));
+http.listen(PORT, '0.0.0.0', () => console.log(`LOODLE listening on http://localhost:${PORT} (WebSocket /ws)`));
 const shutdown = () => {
   for (const socket of server.clients) socket.close(1012, 'Server restarting');
   http.close(() => process.exit(0));
