@@ -193,6 +193,15 @@ export function solvedChallenges(): string[] {
   }
 }
 
+/** Replace the solved list (used when a cloud save is loaded). */
+export function setSolvedChallenges(ids: string[]) {
+  try {
+    localStorage.setItem(KEY, JSON.stringify(ids.filter((id) => CHALLENGES.some((c) => c.id === id))));
+  } catch {
+    /* storage unavailable */
+  }
+}
+
 /** Record a solve. Returns true the first time, when the coins should be paid. */
 export function markSolved(id: string): boolean {
   const solved = solvedChallenges();

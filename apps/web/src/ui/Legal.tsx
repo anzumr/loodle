@@ -8,7 +8,7 @@
  */
 
 /** Set this to the address players should write to. Shown on both pages when set. */
-export const CONTACT_EMAIL = '';
+export const CONTACT_EMAIL = 'anzumr.biz@gmail.com';
 
 const UPDATED = '18 November 2026';
 
@@ -26,8 +26,9 @@ export function Privacy() {
       <small>Last updated {UPDATED}</small>
       <h3>The short version</h3>
       <p>
-        LOODLE has no ads, no analytics and no tracking. Your progress lives on your own device. The game server only
-        holds what it needs to run an online match, and forgets it when the match ends.
+        LOODLE has no ads, no analytics and no tracking. Your progress lives on your own device, and also on our server
+        if you sign in. The game server only holds what it needs to run an online match, and forgets it when the match
+        ends.
       </p>
       <h3>Stored on your device</h3>
       <p>
@@ -44,10 +45,16 @@ export function Privacy() {
       </p>
       <h3>Signing in with Google</h3>
       <p>
-        Signing in is optional. If you do, Google tells us your account ID and name. We keep them only in a signed
-        session cookie on your device for up to 24 hours, so the server can recognise you. We do not receive or store
-        your email address, and we have no account database. Signing in loads Google’s sign-in script, which is covered
-        by Google’s own privacy policy.
+        Signing in is optional. If you do, Google tells us your account ID and name, which we keep in a signed session
+        cookie on your device for up to 24 hours. We do not receive or store your email address. Signing in loads
+        Google’s sign-in script, which is covered by Google’s own privacy policy.
+      </p>
+      <h3>Cloud saves</h3>
+      <p>
+        When you are signed in, your game profile is saved on our database so it follows your account: your Google
+        account ID, display name, picture choice, level, XP, coins, achievements, daily-challenge progress, owned and
+        equipped items, and solved challenges. Nothing else is stored. The database is hosted by Supabase. You can delete
+        your cloud save at any time from your profile, which removes it from our server straight away.
       </p>
       <h3>Children</h3>
       <p>LOODLE has no chat and collects no contact details, so it can be played without sharing personal information.</p>

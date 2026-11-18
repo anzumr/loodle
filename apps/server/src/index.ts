@@ -17,6 +17,8 @@ import { RuleError, type Dice } from '@loodl/rules';
 import { Room, RoomError, VARIANTS, type Variant } from './room';
 import { createAuth } from './auth';
 import { serveWeb } from './http';
+import { connect, createStore, type Store } from './db';
+import { createProfiles } from './profile';
 
 const PORT = Number(process.env.PORT ?? 8787);
 const production = process.env.NODE_ENV === 'production';
@@ -25,6 +27,20 @@ const origins = (process.env.PUBLIC_ORIGIN ?? (production ? '' : 'http://localho
 const APP_ORIGINS = ['https://localhost', 'capacitor://localhost'];
 if (production && !origins.length) throw new Error('Set PUBLIC_ORIGIN to your HTTPS site origin');
 const auth = createAuth({ clientId: process.env.GOOGLE_CLIENT_ID, secret: process.env.AUTH_SECRET, secure: production, origins });
+// Cloud saves for signed-in players. Without DATABASE_URL profiles stay on each device.
+let store: Store | null = null;
+if (process.env.DATABASE_URL) {
+  const candidate = createStore(connect(process.env.DATABASE_URL, process.env.DATABASE_CA));
+  try {
+    await candidate.migrate();
+    store = candidate;
+    console.log('Cloud saves: database connected');
+  } catch (err) {
+    console.error('Cloud saves disabled: could not reach or set up the database.', err instanceof Error ? err.message : err);
+  }
+} else console.log('Cloud saves: off (no DATABASE_URL)');
+const profiles = createProfiles({ store, account: (request) => auth.account(request), origins });
+setInterval(() => profiles.prune(), 60_000).unref();
 const webRoot = fileURLToPath(new URL('../../web/dist/', import.meta.url));
 const ROOM_IDLE_MS = 30 * 60 * 1000;
 const CODE_LETTERS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // no look-alikes (0/O, 1/I/L)
@@ -120,7 +136,7 @@ setInterval(() => {
 
 const http = createServer((request, response) => {
   void (async () => {
-    if (!await auth.handle(request, response)) await serveWeb(request, response, webRoot);
+    if (!await auth.handle(request, response) && !await profiles.handle(request, response)) await serveWeb(request, response, webRoot);
   })().catch(() => { if (!response.headersSent) response.writeHead(500); response.end(); });
 });
 const server = new WebSocketServer({ noServer: true, maxPayload: 2048 });

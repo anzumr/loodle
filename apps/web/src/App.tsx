@@ -24,6 +24,8 @@ import { Tutorial } from './ui/Tutorial';
 import { Challenges } from './ui/Challenges';
 import { Privacy, Terms } from './ui/Legal';
 import { isNativeApp, siteOrigin } from './platform';
+import { loadCloud, mergeProfiles, saveCloud, type CloudProfile, type CloudState } from './cloud';
+import { setSolvedChallenges, solvedChallenges } from './challenges';
 import { AccountPanel, type Account } from './ui/AccountPanel';
 import { play, setSoundEnabled, type Sfx } from './sound';
 import { COSMETICS, buyCosmetic, equipCosmetic, sanitizeWardrobe, type Wardrobe } from '@loodl/rules';
@@ -345,6 +347,85 @@ export function App() {
       if (e.type === 'captured' && e.by === mySeat.current) tally.current.captures++;
     }
   };
+  // ---------- cloud saves ----------
+  // Signed-in players keep their profile on the server. The first time an account and a
+  // device meet, the two are merged; after that every change is saved shortly after it happens.
+  const [cloud, setCloud] = useState<CloudState>('off');
+  /** Accounts whose cloud save was deleted on this device; they are not uploaded again unless turned back on. */
+  const [cloudOptOut, setCloudOptOut] = useState<string[]>(() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem('loodl.cloudOptOut') ?? '[]');
+      return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string') : [];
+    } catch {
+      return [];
+    }
+  });
+  const optedOut = !!account && cloudOptOut.includes(account.id);
+  const setOptOut = (id: string, out: boolean) => {
+    const next = out ? [...new Set([...cloudOptOut, id])] : cloudOptOut.filter((x) => x !== id);
+    setCloudOptOut(next);
+    store('loodl.cloudOptOut', next);
+  };
+  /** Bumped when solved challenges change, so they are saved too. */
+  const [challengeTick, setChallengeTick] = useState(0);
+  const cloudReady = useRef(false);
+  const localProfile = (): CloudProfile => ({ name: nameCheck.ok ? nameCheck.name : 'Guest', avatar, progress, wardrobe, challenges: solvedChallenges() });
+  const adopt = (p: CloudProfile) => {
+    setProgress(p.progress);
+    store('loodl.progress', p.progress);
+    setWardrobe(p.wardrobe);
+    store('loodl.wardrobe', p.wardrobe);
+    if (p.name !== 'Guest') rename(p.name);
+    chooseAvatar(p.avatar);
+    setSolvedChallenges(p.challenges);
+  };
+  useEffect(() => {
+    cloudReady.current = false;
+    if (!account || isNativeApp || optedOut) return setCloud('off');
+    let active = true;
+    setCloud('loading');
+    loadCloud()
+      .then(async ({ enabled, profile }) => {
+        if (!active) return;
+        if (!enabled) return setCloud('off');
+        const merged = profile ? mergeProfiles(localProfile(), profile) : localProfile();
+        adopt(merged);
+        await saveCloud(merged);
+        if (!active) return;
+        cloudReady.current = true;
+        setCloud('synced');
+      })
+      .catch(() => active && setCloud('error'));
+    return () => {
+      active = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [account?.id, optedOut]);
+  useEffect(() => {
+    if (!cloudReady.current || !account) return;
+    setCloud('saving');
+    const id = window.setTimeout(() => {
+      saveCloud(localProfile())
+        .then(() => setCloud('synced'))
+        .catch(() => setCloud('error'));
+    }, 1500);
+    return () => window.clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [progress, wardrobe, name, avatar, challengeTick]);
+
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const deleteCloud = () => {
+    setConfirmDelete(false);
+    cloudReady.current = false;
+    fetch('/api/profile', { method: 'DELETE', credentials: 'same-origin' })
+      .then((r) => {
+        if (!r.ok) return setCloud('error');
+        if (account) setOptOut(account.id, true);
+        setCloud('off');
+      })
+      .catch(() => setCloud('error'));
+  };
+
   const rank = levelFor(progress.xp);
   const today = new Date().toISOString().slice(0, 10);
   const conn = useRef<Connection | null>(null);
@@ -1439,7 +1520,35 @@ export function App() {
           {isNativeApp ? (
             <p className="hint">Google sign-in is available on loodle.online. Your progress in the app is saved on this device.</p>
           ) : (
-            <AccountPanel onChange={setAccount} />
+            <>
+              <AccountPanel onChange={setAccount} />
+              {account && optedOut && (
+                <button className="mode" onClick={() => setOptOut(account.id, false)}>
+                  <span>
+                    <strong>Turn cloud save back on</strong>
+                    <small>Your cloud save was deleted on this device. Turning it on saves this device’s progress to your account.</small>
+                  </span>
+                </button>
+              )}
+              {account && cloud !== 'off' && (
+                <div className="setting stacked">
+                  <span>
+                    <strong>Cloud save</strong>
+                    <small>
+                      {{ loading: 'Loading your saved progress…', synced: 'Your progress is saved to your account', saving: 'Saving…', error: 'Could not reach cloud saves. Progress is kept on this device and will save when it can.' }[cloud]}
+                    </small>
+                  </span>
+                  {(cloud === 'synced' || cloud === 'saving') && (
+                    <button className="mode" onClick={() => (confirmDelete ? deleteCloud() : setConfirmDelete(true))}>
+                      <span>
+                        <strong>{confirmDelete ? 'Tap again to delete for good' : 'Delete my cloud save'}</strong>
+                        <small>Removes your saved progress from our server and stops saving it. This device keeps its copy.</small>
+                      </span>
+                    </button>
+                  )}
+                </div>
+              )}
+            </>
           )}
         </Sheet>}
 
@@ -1498,11 +1607,11 @@ export function App() {
         quality={quality}
         onClose={() => (setTutorial(false), setSheet('play'))}
         onReward={(coins) =>
-          setProgress((current) => {
+          (setChallengeTick((t) => t + 1), setProgress((current) => {
             const paid = { ...current, coins: current.coins + coins };
             store('loodl.progress', paid);
             return paid;
-          })
+          }))
         }
       />
     )}
