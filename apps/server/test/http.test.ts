@@ -7,6 +7,13 @@ describe('public static routes', () => {
     expect(assetPath('/index.html?v=2')).toBe('index.html');
     expect(assetPath('/assets/index-abc.js')).toBe('assets/index-abc.js');
   });
+  it('serves the installable-app files at their fixed addresses, and nothing else at the root', () => {
+    expect(assetPath('/manifest.webmanifest')).toBe('manifest.webmanifest');
+    expect(assetPath('/sw.js')).toBe('sw.js');
+    expect(assetPath('/icons/maskable-512.png')).toBe('icons/maskable-512.png');
+    expect(assetPath('/icons/other.png')).toBeNull();
+    expect(assetPath('/main.js')).toBeNull();
+  });
   it.each(['/../package.json', '/assets/../../.env', '/assets/%2e%2e/%2e%2e/.env', '/assets/..%5c..%5c.env', '/.git/config', '/src/index.ts', '/assets/config.json', '/assets/%00.js', '/%broken'])('does not expose %s', (path) => {
     expect(assetPath(path)).toBeNull();
   });

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">LOODLE</string>
+    <string name="title_activity_main">LOODLE</string>
+    <string name="package_name">online.loodle.app</string>
+    <string name="custom_url_scheme">online.loodle.app</string>
+</resources>

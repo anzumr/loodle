@@ -980,6 +980,16 @@ button:focus-visible {
 .tutorial-choices { text-align: center; }
 .tutorial-choices > span { display: block; margin-bottom: 8px; }
 .tutorial-next { font-size: 28px; }
+.challenge-list {
+  position: static;
+  align-self: center;
+  width: min(460px, 100%);
+  max-height: calc(100% - 80px);
+  margin-top: 12px;
+  overflow-y: auto;
+}
+.challenge-list { border-radius: 24px; }
+.challenge-list .mode.done strong { color: var(--gold-300); }
 .profile-button { border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .profile-button .profile-text strong { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-height: 500px) and (orientation: landscape) {
@@ -1205,4 +1215,25 @@ button:focus-visible {
 }
 .die-btn:disabled {
   cursor: default;
+}
+
+/* ---------- privacy and terms ---------- */
+
+.legal {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  line-height: 1.45;
+  font-size: 15px;
+}
+.legal h3 {
+  margin: 10px 0 0;
+  font-size: 16px;
+  color: var(--gold-300);
+}
+.legal p {
+  margin: 0;
+}
+.legal a {
+  color: var(--gold-300);
 }

@@ -1,5 +1,6 @@
-/** Connection to the LOODL game server (private rooms). */
+/** Connection to the LOODLE game server (private rooms). */
 import type { GameEvent, MatchState, Seat } from '@loodl/rules';
+import { isNativeApp, PUBLIC_SITE } from './platform';
 
 export interface RoomView {
   code: string;
@@ -10,11 +11,17 @@ export interface RoomView {
   actionDeadline: number | null;
   public: boolean;
   startsAt: number | null;
+  /** Pawns each player gets (older servers leave this out). */
+  pawns?: 2 | 3 | 4;
+  /** Most players the room takes (older servers leave this out). */
+  capacity?: number;
 }
 
 export type ServerMessage = { t: 'room'; room: RoomView; you: number; events: GameEvent[] } | { t: 'error'; message: string };
 
-const serverUrl = () => (import.meta.env.VITE_SERVER_URL as string | undefined) || `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
+const serverUrl = () =>
+  (import.meta.env.VITE_SERVER_URL as string | undefined) ||
+  (isNativeApp ? `${PUBLIC_SITE.replace('https', 'wss')}/ws` : `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
 
 const roomKey = () => `loodl.room${new URLSearchParams(location.search).get('p') ?? ''}`;
 export function rememberedRoom(): string | null {

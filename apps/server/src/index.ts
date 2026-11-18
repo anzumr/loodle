@@ -5,7 +5,7 @@
  * player in the room the full room view, which keeps clients simple and makes
  * reconnecting trivial: rejoin with the same token and you get the current state.
  *
- * Client → server:  create {token,name,variant,dice} | join {token,name,code} | quick {token,name,variant,dice}
+ * Client → server:  create {token,name,variant,dice,pawns} | join {token,name,code} | quick {token,name,variant,dice}
  *                    | start | roll | move {pawn} | rematch | leave
  * Server → client:  room {room, you, events} | error {message}
  */
@@ -21,6 +21,8 @@ import { serveWeb } from './http';
 const PORT = Number(process.env.PORT ?? 8787);
 const production = process.env.NODE_ENV === 'production';
 const origins = (process.env.PUBLIC_ORIGIN ?? (production ? '' : 'http://localhost:5173,http://localhost:8787')).split(',').filter(Boolean);
+/** The Android and iOS apps load the game from these origins and connect to /ws from them. */
+const APP_ORIGINS = ['https://localhost', 'capacitor://localhost'];
 if (production && !origins.length) throw new Error('Set PUBLIC_ORIGIN to your HTTPS site origin');
 const auth = createAuth({ clientId: process.env.GOOGLE_CLIENT_ID, secret: process.env.AUTH_SECRET, secure: production, origins });
 const webRoot = fileURLToPath(new URL('../../web/dist/', import.meta.url));
@@ -70,7 +72,9 @@ function handle(socket: WebSocket, msg: Record<string, unknown>, request: Incomi
     if (msg.t === 'quick') room = [...rooms.values()].find((r) => r.joinable && r.variant === variant && r.diceCount === diceCount && r.indexOf(token) < 0);
     if (msg.t === 'create' || (msg.t === 'quick' && !room)) {
       if (rooms.size >= 500) throw new RoomError('Server is full. Please try again later.');
-      room = new Room(newCode(), variant, dice, msg.t === 'quick', diceCount);
+      if (msg.t === 'create' && !allowCreate(addressOf(request))) throw new RoomError('Too many new rooms. Wait a minute and try again.');
+      const pawns: 2 | 3 | 4 = msg.t === 'create' && (msg.pawns === 2 || msg.pawns === 3) ? msg.pawns : 4;
+      room = new Room(newCode(), variant, dice, msg.t === 'quick', diceCount, pawns);
       rooms.set(room.code, room);
     } else if (msg.t === 'join') {
       room = rooms.get(String(msg.code ?? '').toUpperCase().trim());
@@ -91,6 +95,29 @@ function handle(socket: WebSocket, msg: Record<string, unknown>, request: Incomi
   throw new RoomError('Unknown message');
 }
 
+// ---------- per-address limits ----------
+// Render sits behind a proxy, so the client address is the first X-Forwarded-For entry there.
+const addressOf = (request: IncomingMessage): string =>
+  (production ? String(request.headers['x-forwarded-for'] ?? '').split(',')[0]!.trim() : '') || request.socket.remoteAddress || 'unknown';
+/** Open WebSocket connections per address. */
+export const MAX_SOCKETS_PER_ADDRESS = 12;
+/** Private rooms one address may open per minute. */
+export const MAX_CREATES_PER_MINUTE = 10;
+const socketsByAddress = new Map<string, number>();
+const createsByAddress = new Map<string, number[]>();
+function allowCreate(address: string): boolean {
+  const now = Date.now();
+  const recent = (createsByAddress.get(address) ?? []).filter((t) => t > now - 60_000);
+  if (recent.length >= MAX_CREATES_PER_MINUTE) return false;
+  recent.push(now);
+  createsByAddress.set(address, recent);
+  return true;
+}
+setInterval(() => {
+  const cutoff = Date.now() - 60_000;
+  for (const [address, times] of createsByAddress) if (!times.some((t) => t > cutoff)) createsByAddress.delete(address);
+}, 60_000).unref();
+
 const http = createServer((request, response) => {
   void (async () => {
     if (!await auth.handle(request, response)) await serveWeb(request, response, webRoot);
@@ -100,14 +127,22 @@ const server = new WebSocketServer({ noServer: true, maxPayload: 2048 });
 http.on('upgrade', (request, socket, head) => {
   const path = request.url?.split('?')[0];
   const allowed = request.headers.origin
-    ? origins.includes(request.headers.origin) || (!production && request.headers.origin === `http://${request.headers.host}`)
+    ? origins.includes(request.headers.origin) || APP_ORIGINS.includes(request.headers.origin) || (!production && request.headers.origin === `http://${request.headers.host}`)
     : !request.headers.cookie;
-  if ((path !== '/ws' && (production || path !== '/')) || !allowed || server.clients.size >= 1000) {
+  const address = addressOf(request);
+  if ((path !== '/ws' && (production || path !== '/')) || !allowed || server.clients.size >= 1000 || (socketsByAddress.get(address) ?? 0) >= MAX_SOCKETS_PER_ADDRESS) {
     socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); socket.destroy(); return;
   }
   server.handleUpgrade(request, socket, head, (ws) => server.emit('connection', ws, request));
 });
 server.on('connection', (socket, request) => {
+  const address = addressOf(request);
+  socketsByAddress.set(address, (socketsByAddress.get(address) ?? 0) + 1);
+  socket.on('close', () => {
+    const left = (socketsByAddress.get(address) ?? 1) - 1;
+    if (left > 0) socketsByAddress.set(address, left);
+    else socketsByAddress.delete(address);
+  });
   socket.on('error', () => socket.close());
   let budget = 30;
   let resetAt = Date.now() + 10_000;

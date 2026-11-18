@@ -33,11 +33,40 @@ describe('room lobby', () => {
     expect(() => room.start(C)).toThrow(RoomError);
   });
 
-  it('rejects a fifth player and anyone arriving after the start', () => {
+  it('takes up to eight players in a private room, four in Quick Play, and nobody after the start', () => {
     const room = new Room('TEST1', 'classic', seededDice(1));
-    ['1', '2', '3', '4'].forEach((n) => room.join(A + n, 'Guest'));
+    ['1', '2', '3', '4', '5', '6', '7', '8'].forEach((n) => room.join(A + n, 'Guest'));
     expect(() => room.join(B, 'Late')).toThrow(RoomError);
+    const quick = new Room('QUICK', 'classic', seededDice(1), true);
+    ['1', '2', '3', '4'].forEach((n) => quick.join(A + n, 'Guest'));
+    expect(() => quick.join(B, 'Late')).toThrow(RoomError);
     expect(() => started().join(C, 'Late')).toThrow(RoomError);
+  });
+
+  it('plays eight players on the eight-arm board with the room’s pawn count', () => {
+    const room = new Room('BIG88', 'classic', seededDice(3), false, 1, 2);
+    ['1', '2', '3', '4', '5', '6', '7', '8'].forEach((n) => room.join(A + n, 'Guest'));
+    room.start(A + '1');
+    const view = room.view();
+    expect(view.match?.config.boardSeats).toBe(8);
+    expect(view.match?.seats).toHaveLength(8);
+    expect(view.match?.pawns[7]).toHaveLength(2);
+    expect(view).toMatchObject({ pawns: 2, capacity: 8 });
+  });
+
+  it('plays an eight-player room to the end through the server', () => {
+    const room = new Room('BIG88', 'classic', seededDice(9), false, 2, 2);
+    const tokens = ['1', '2', '3', '4', '5', '6', '7', '8'].map((n) => A + n);
+    tokens.forEach((t) => room.join(t, 'Guest'));
+    room.start(tokens[0]!);
+    for (let guard = 0; room.view().match!.turn.phase !== 'over'; guard++) {
+      if (guard > 60000) throw new Error('match did not finish');
+      const m = room.view().match!;
+      const who = tokens[m.seats.indexOf(m.turn.seat)]!;
+      if (m.turn.phase === 'roll') room.roll(who);
+      else room.move(who, legalMoves(m)[0]!.pawn, legalMoves(m)[0]!.die);
+    }
+    expect(room.view().match!.finishOrder).toHaveLength(8);
   });
 
   it('never exposes tokens and cleans up names', () => {

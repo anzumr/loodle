@@ -1,6 +1,24 @@
-# LOODL handoff — pick up here
+# LOODLE handoff — pick up here
 
-Written 2026-11-16 for the next developer or coding agent. The product spec is the v3.0 "Complete Greenfield Development Handoff" (web first, mobile later). Read this file, then `README.md`, `docs/TECH_DECISIONS.md` and `docs/RULES.md`.
+Written 2026-11-16, updated 2026-11-18, for the next developer or coding agent. The product spec is the v3.0 "Complete Greenfield Development Handoff" (web first, mobile later). Read this file, then `README.md`, `docs/TECH_DECISIONS.md`, `docs/RULES.md` and `docs/MOBILE.md`. The game is now called **LOODLE** (repo, folders, `@loodl/*` packages and `loodl.*` storage keys keep the old spelling so saved progress survives).
+
+## Stage status (2026-11-18)
+
+| Stage | State |
+|---|---|
+| 0 Architecture | Done, including PWA (manifest, offline service worker) and Capacitor apps. |
+| 1–3 Visuals, rules, offline game | Done. Art and sounds are code-generated placeholders. |
+| 4 AI and modes | Done: 5 AI levels, Solo, Quick Race/Clash, tutorial, timers, **practice** (no timers, Expert hints, no rewards), **6 challenge scenarios** with first-solve coins (also the campaign framework). More challenge content can be added to `apps/web/src/challenges.ts`. |
+| 5 Online | Done for one server: rooms, Quick Play, bots, reconnect, rematch, invite links, per-message and **per-address limits**. Not done: rooms survive restarts, several server processes, browser-level two-player e2e tests. |
+| 6 Accounts | Partly: names/pictures (local), Google sign-in code (never tested with a real login, hidden in the apps). Needs a database. |
+| 7 Players | Done offline; **private online rooms take 2–8 players** with the host's pawn count. Quick Play stays at 4. Teams not built. |
+| 8 Progression/ranked | XP, levels, coins, achievements, daily challenges (local). Ranked needs a database. |
+| 9 Cosmetics/money | Shop, skins, solo coin wagers (local). Real-money purchases: owner decision, needs a database and payment provider. |
+| 10 Shop/social/content | Friends lists, chat, block/report: need a database. |
+| 11 Website | Live at loodle.online. **Code split** (game 94 kB, React and three.js in their own cached files), **privacy and terms** at `/?page=privacy` and `/?page=terms` (set `CONTACT_EMAIL` in `apps/web/src/ui/Legal.tsx`). No analytics by design. |
+| 12 Android/iOS | Projects created; Android debug build runs on the emulator. Release signing, store listings and the iOS build (needs a Mac) are owner steps in `docs/MOBILE.md`. |
+
+**Blocking owner decisions:** a database for accounts, cloud saves, ranked, friends and online wagers; whether to sell anything for real money; Play/Apple developer accounts and signing keys; a public contact email.
 
 ## Where things stand
 

@@ -22,7 +22,10 @@ import {
 
 export const VARIANTS = { classic: CLASSIC_RULES, race: QUICK_RACE_RULES, clash: QUICK_CLASH_RULES } as const;
 export type Variant = keyof typeof VARIANTS;
-export const MAX_PLAYERS = 4;
+/** Private rooms: up to eight players, on the larger boards from five. */
+export const MAX_PLAYERS = 8;
+/** Quick Play rooms fill to four, with bots if needed, so matches stay short. */
+export const QUICK_PLAYERS = 4;
 /** Time a player has to roll before the server rolls for them. */
 export const ROLL_TIMEOUT_MS = 6_000;
 /** Time a player has to choose a pawn before the server moves for them. */
@@ -59,6 +62,10 @@ export interface RoomView {
   /** Index into `players` of the host. */
   host: number;
   players: { name: string; avatar: number; seat: Seat | null; connected: boolean; bot: boolean }[];
+  /** Pawns each player gets in this room's matches. */
+  pawns: 2 | 3 | 4;
+  /** Most players this room takes. */
+  capacity: number;
   match: MatchState | null;
   actionDeadline: number | null;
   /** True for Quick Play rooms: anyone can be matched in and the match starts by itself. */
@@ -86,7 +93,13 @@ export class Room {
     private dice: Dice,
     readonly isPublic = false,
     readonly diceCount: 1 | 2 = 1,
+    readonly pawns: 2 | 3 | 4 = 4,
   ) {}
+
+  /** Most players this room takes. */
+  get capacity(): number {
+    return this.isPublic ? QUICK_PLAYERS : MAX_PLAYERS;
+  }
 
   private find(token: string): Player {
     const player = this.players.find((p) => p.token === token);
@@ -107,21 +120,21 @@ export class Room {
       return;
     }
     if (this.match) throw new RoomError('That match has already started');
-    if (this.players.length >= MAX_PLAYERS) throw new RoomError('That room is full');
+    if (this.players.length >= this.capacity) throw new RoomError('That room is full');
     this.players.push({ token, name: cleanName(name), avatar: cleanAvatar(avatar), seat: null, connected: true, bot: false });
     this.scheduleStart();
   }
 
   /** Open to Quick Play matchmaking: not started and not full. */
   get joinable(): boolean {
-    return this.isPublic && !this.match && this.players.length < MAX_PLAYERS && !this.empty;
+    return this.isPublic && !this.match && this.players.length < this.capacity && !this.empty;
   }
 
   /** Quick Play rooms start by themselves: at once when full, after a short countdown otherwise. */
   private scheduleStart(now = Date.now()) {
     if (!this.isPublic || this.match) return;
     if (this.players.length < 2) this.startsAt = null;
-    else if (this.players.length >= MAX_PLAYERS) this.startsAt = now;
+    else if (this.players.length >= this.capacity) this.startsAt = now;
     else this.startsAt ??= now + PUBLIC_START_DELAY_MS;
   }
 
@@ -132,7 +145,7 @@ export class Room {
   lobbyTick(now = Date.now()): boolean {
     if (!this.isPublic || this.match || this.empty) return false;
     if (this.players.length < 2 && now >= Math.max(this.created, this.touched) + BOT_FILL_MS) {
-      while (this.players.length < MAX_PLAYERS)
+      while (this.players.length < this.capacity)
         this.players.push({ token: `bot:${this.players.length}`, name: BOT_NAMES[this.players.length - 1]!, avatar: 3 + this.players.length, seat: null, connected: true, bot: true });
       this.startsAt = now;
     }
@@ -178,7 +191,7 @@ export class Room {
     this.startsAt = null;
     const seats = defaultSeats(this.players.length);
     this.players.forEach((p, i) => (p.seat = seats[i]!));
-    this.match = createMatch({ seats, config: { ...VARIANTS[this.variant], dice: this.diceCount } });
+    this.match = createMatch({ seats, config: { ...VARIANTS[this.variant], dice: this.diceCount, pawnsPerPlayer: this.pawns } });
     this.actionDeadline = Date.now() + timeoutFor(this.match);
     this.botAt = Date.now() + BOT_DELAY_MS;
   }
@@ -243,6 +256,8 @@ export class Room {
       dice: this.diceCount,
       host: 0,
       players: this.players.map(({ name, avatar, seat, connected, bot }) => ({ name, avatar, seat, connected, bot })),
+      pawns: this.pawns,
+      capacity: this.capacity,
       match: this.match,
       actionDeadline: this.actionDeadline,
       public: this.isPublic,

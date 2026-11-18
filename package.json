@@ -2,14 +2,18 @@
   "name": "loodl",
   "private": true,
   "type": "module",
-  "workspaces": ["packages/*", "apps/*"],
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
     "dev": "npm run dev -w @loodl/web",
     "server": "npm run dev -w @loodl/server",
     "start": "npm run start -w @loodl/server",
     "build": "npm run build -w @loodl/web",
     "test": "vitest run",
-    "typecheck": "tsc -p packages/rules --noEmit && tsc -p apps/web --noEmit && tsc -p apps/server --noEmit"
+    "typecheck": "tsc -p packages/rules --noEmit && tsc -p apps/web --noEmit && tsc -p apps/server --noEmit",
+    "app:sync": "npm run app:sync -w @loodl/web"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

@@ -18,3 +18,7 @@ docs
 src
 tests
 *.md
+apps/web/android
+apps/web/ios
+**/*.jks
+**/*.keystore

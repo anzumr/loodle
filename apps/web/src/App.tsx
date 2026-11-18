@@ -21,6 +21,9 @@ import { BoardScene, type CameraMode, type Quality } from './scene/BoardScene';
 import { Logo } from './ui/Logo';
 import { Die } from './ui/Die';
 import { Tutorial } from './ui/Tutorial';
+import { Challenges } from './ui/Challenges';
+import { Privacy, Terms } from './ui/Legal';
+import { isNativeApp, siteOrigin } from './platform';
 import { AccountPanel, type Account } from './ui/AccountPanel';
 import { play, setSoundEnabled, type Sfx } from './sound';
 import { COSMETICS, buyCosmetic, equipCosmetic, sanitizeWardrobe, type Wardrobe } from '@loodl/rules';
@@ -77,6 +80,8 @@ interface Saved {
   humans: Seat[];
   level: AiLevel;
   wager?: Wager | null;
+  /** Practice: no timers, hints, no rewards. */
+  practice?: boolean;
 }
 
 const validWager = (w: unknown): Wager | null => {
@@ -88,10 +93,10 @@ const validWager = (w: unknown): Wager | null => {
 
 function loadSaved(): Saved | null {
   try {
-    const raw = JSON.parse(localStorage.getItem(SAVE_KEY) ?? 'null') as { match: string; humans: Seat[]; level: AiLevel; wager?: unknown } | null;
+    const raw = JSON.parse(localStorage.getItem(SAVE_KEY) ?? 'null') as { match: string; humans: Seat[]; level: AiLevel; wager?: unknown; practice?: unknown } | null;
     if (!raw || !Array.isArray(raw.humans) || !AI_LEVELS.includes(raw.level)) return null;
     const match = deserializeMatch(raw.match);
-    return match.turn.phase === 'over' ? null : { match, humans: raw.humans, level: raw.level, wager: validWager(raw.wager) };
+    return match.turn.phase === 'over' ? null : { match, humans: raw.humans, level: raw.level, wager: validWager(raw.wager), practice: raw.practice === true };
   } catch {
     return null;
   }
@@ -157,6 +162,16 @@ const INVITE_CODE: string | null = (() => {
   }
 })();
 
+/** loodle.online/?page=privacy or ?page=terms opens that page directly (app stores link to it). */
+const INITIAL_PAGE: 'privacy' | 'terms' | null = (() => {
+  try {
+    const page = new URLSearchParams(window.location.search).get('page');
+    return page === 'privacy' || page === 'terms' ? page : null;
+  } catch {
+    return null;
+  }
+})();
+
 /** A computer or timed-out move, including which die to use in two-dice games. */
 const pickMove = (match: MatchState, level: AiLevel) => {
   const m = chooseLegalMove(match, level, Math.random);
@@ -167,9 +182,10 @@ export function App() {
   const host = useRef<HTMLDivElement>(null);
   const scene = useRef<BoardScene | null>(null);
   const [screen, setScreen] = useState<Screen>('lobby');
-  const [tutorial, setTutorial] = useState(false);
+  /** A full-screen board overlay: the guided lessons or the challenge scenarios. */
+  const [tutorial, setTutorial] = useState<false | 'lessons' | 'challenges'>(false);
   const [view, setView] = useState<View>('angled');
-  const [sheet, setSheet] = useState<'play' | 'settings' | 'help' | 'friends' | 'account' | 'collection' | 'leave' | null>(null);
+  const [sheet, setSheet] = useState<'play' | 'settings' | 'help' | 'friends' | 'account' | 'collection' | 'leave' | 'privacy' | 'terms' | null>(INITIAL_PAGE);
   const [account, setAccount] = useState<Account | null>(null);
   const [variant, setVariant] = useState<Variant>('classic');
   const [quality, setQuality] = useState<Quality>(loadQuality);
@@ -198,6 +214,7 @@ export function App() {
   const [stake, setStake] = useState(0);
   /** Wager on the solo match in play, already paid out of coins. */
   const [wager, setWager] = useState<Wager | null>(saved?.wager ?? null);
+  const [practice, setPractice] = useState(saved?.practice ?? false);
   const [wagerResult, setWagerResult] = useState<{ stake: number; payout: number } | null>(null);
   const [sound, setSound] = useState(() => {
     try {
@@ -258,7 +275,7 @@ export function App() {
   /** Feedback after sharing an invite ("Link copied!"), cleared after a moment. */
   const [inviteNote, setInviteNote] = useState('');
   const shareInvite = async (roomCode: string) => {
-    const url = `${window.location.origin}/?join=${roomCode}`;
+    const url = `${siteOrigin()}/?join=${roomCode}`;
     const say = (note: string) => {
       setInviteNote(note);
       window.setTimeout(() => setInviteNote(''), 2500);
@@ -334,6 +351,7 @@ export function App() {
 
   useEffect(() => {
     let active = true;
+    if (isNativeApp) return; // the app has no sign-in yet
     void fetch('/api/auth/session').then(async (response) => {
       if (response.ok) {
         const result = await response.json() as { user: Account | null };
@@ -352,6 +370,7 @@ export function App() {
       setHumans(offlineMatch.current.humans);
       setLevel(offlineMatch.current.level);
       setWager(offlineMatch.current.wager ?? null);
+      setPractice(offlineMatch.current.practice ?? false);
     }
     setScreen('lobby');
   };
@@ -365,9 +384,10 @@ export function App() {
   };
 
   /** Create a room, or join one by code. The server owns the match from here on. */
-  const enterRoom = (first: { t: 'create' | 'quick'; variant: string; dice: 1 | 2 } | { t: 'join'; code: string }) => {
+  const enterRoom = (first: { t: 'create' | 'quick'; variant: string; dice: 1 | 2; pawns?: 2 | 3 | 4 } | { t: 'join'; code: string }) => {
     setNetError('');
-    if (!networkSession) offlineMatch.current = match ? { match, humans, level, wager } : null;
+    if (!networkSession) offlineMatch.current = match ? { match, humans, level, wager, practice } : null;
+    setPractice(false);
     setWager(null);
     setNetworkSession(true);
     try {
@@ -443,6 +463,15 @@ export function App() {
   const twoDice = match?.config.dice === 2;
   const activeDie = twoDice ? (pickedDie !== null && left.includes(pickedDie) ? pickedDie : (left.find((d) => moves.some((m) => m.die === d)) ?? null)) : null;
   const shownMoves = activeDie === null ? moves : moves.filter((m) => m.die === activeDie);
+  /** Practice: the move the expert AI would make, shown on request. */
+  const [hint, setHint] = useState<{ pawn: number; die: number } | null>(null);
+  useEffect(() => setHint(null), [match]);
+  const showHint = () => {
+    if (!match || match.turn.phase !== 'move') return;
+    const best = chooseLegalMove(match, 'expert', () => 0.5);
+    setHint({ pawn: best.pawn, die: best.die });
+    if (match.config.dice === 2) setPickedDie(best.die);
+  };
   const forced = human && moves.length > 0 && moves.every((m) => m.from === moves[0]!.from && m.die === moves[0]!.die);
 
   const act = useCallback((state: MatchState, action: Parameters<typeof applyAction>[1]) => {
@@ -510,10 +539,10 @@ export function App() {
     const showing = screen === 'board' && match;
     scene.current?.setView(
       showing
-        ? { pawns: match.pawns, seat: match.turn.seat, movable: forced || !human ? [] : shownMoves.map((m) => m.pawn), boardSeats: match.config.boardSeats }
+        ? { pawns: match.pawns, seat: match.turn.seat, movable: forced || !human ? [] : hint ? [hint.pawn] : shownMoves.map((m) => m.pawn), boardSeats: match.config.boardSeats }
         : null,
     );
-  }, [screen, match, moves, forced, human, tutorial]);
+  }, [screen, match, moves, forced, human, tutorial, hint]);
 
   useEffect(() => {
     if (!forced || screen !== 'board') return;
@@ -525,7 +554,7 @@ export function App() {
   // Online, the server keeps the same clock and acts itself.
   const [localDeadline, setLocalDeadline] = useState<number | null>(null);
   useEffect(() => {
-    if (networkSession || !match || screen !== 'board' || match.turn.phase === 'over' || !human || rolling || forced) {
+    if (networkSession || practice || !match || screen !== 'board' || match.turn.phase === 'over' || !human || rolling || forced) {
       setLocalDeadline(null);
       return;
     }
@@ -538,7 +567,7 @@ export function App() {
     );
     return () => window.clearTimeout(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [match, screen, human, rolling, forced, networkSession]);
+  }, [match, screen, human, rolling, forced, networkSession, practice]);
   const deadline = online?.room.actionDeadline ?? localDeadline;
 
   // Auto roll: when it's your turn to roll, the dice roll for you after a short pause.
@@ -611,12 +640,12 @@ export function App() {
   useEffect(() => {
     if (networkSession) return; // online matches live on the server; preserve the offline save
     try {
-      if (match && match.turn.phase !== 'over') localStorage.setItem(SAVE_KEY, JSON.stringify({ match: serializeMatch(match), humans, level, wager }));
+      if (match && match.turn.phase !== 'over') localStorage.setItem(SAVE_KEY, JSON.stringify({ match: serializeMatch(match), humans, level, wager, practice }));
       else localStorage.removeItem(SAVE_KEY);
     } catch {
       /* storage unavailable: the match just won't survive a reload */
     }
-  }, [match, humans, level, networkSession, wager]);
+  }, [match, humans, level, networkSession, wager, practice]);
 
   useEffect(() => {
     setSoundEnabled(sound);
@@ -640,14 +669,15 @@ export function App() {
     }
   }, [quality, tutorial]);
 
-  const startMatch = () => {
+  const startMatch = (practiceMode = false) => {
+    setPractice(practiceMode);
     const fresh = createMatch({ players, config: { ...VARIANTS[variant].rules, pawnsPerPlayer: pawnCount, dice: diceCount } });
     tally.current = { captures: 0, sixes: 0 };
     setReward(null);
     setWagerResult(null);
     // The stake leaves your coins now; a win pays it back multiplied. Any wager on a
     // match being replaced is lost, the same as quitting it.
-    if (solo && stake > 0 && canWager(stake, progress.coins)) {
+    if (solo && !practiceMode && stake > 0 && canWager(stake, progress.coins)) {
       const paid = { ...progress, coins: progress.coins - stake };
       setProgress(paid);
       store('loodl.progress', paid);
@@ -670,7 +700,7 @@ export function App() {
     rewardedMatch.current = match;
     const seat = humans.length === 1 ? humans[0]! : null;
     const place = seat === null ? 0 : match.finishOrder.indexOf(seat) + 1;
-    if (seat === null || place === 0 || match.seats.length < 2) return setReward(null);
+    if (seat === null || place === 0 || match.seats.length < 2 || (practice && !online)) return setReward(null);
     const payout = !online && wager ? (place === 1 ? Math.floor(wager.stake * wager.multiplier) : 0) : 0;
     setWagerResult(!online && wager ? { stake: wager.stake, payout } : null);
     if (!online) setWager(null);
@@ -740,7 +770,7 @@ export function App() {
 
   return (
     <>
-    <div className={`app screen-${screen}`} inert={tutorial || undefined} aria-hidden={tutorial || undefined}>
+    <div className={`app screen-${screen}`} inert={!!tutorial || undefined} aria-hidden={!!tutorial || undefined}>
       <div className="backdrop" aria-hidden="true" />
       <div className="stage" ref={host} />
 
@@ -857,6 +887,14 @@ export function App() {
                   {readout}
                 </div>
               )}
+              {practice && !online && human && turn.phase === 'move' && !forced && (
+                <button className="mode skip-btn" onClick={showHint}>
+                  <span>
+                    <strong>{hint ? `Hint: pawn ${hint.pawn + 1}${twoDice ? ` with the ${hint.die}` : ''}` : 'Hint'}</strong>
+                    <small>{hint ? 'Only that pawn glows now' : 'Show the move the Expert rival would make'}</small>
+                  </span>
+                </button>
+              )}
               {humansDone && (
                 <button className="mode on skip-btn" disabled={skipping} onClick={() => setSkipping(true)}>
                   <span>
@@ -927,7 +965,7 @@ export function App() {
                 ))}
               </div>
             ) : (
-              humans.length !== 1 && <p className="hint">Pass &amp; Play matches don’t earn XP or coins.</p>
+              <p className="hint">{practice && !online ? 'Practice matches don’t earn XP or coins.' : humans.length !== 1 ? 'Pass & Play matches don’t earn XP or coins.' : ''}</p>
             )}
             {wagerResult && (
               <div className={`setting wager-result ${wagerResult.payout ? 'won' : 'lost'}`} aria-live="polite">
@@ -947,7 +985,7 @@ export function App() {
                 </strong>
               </div>
             ))}
-            <button className="mode on" onClick={online ? () => conn.current?.send({ t: 'rematch' }) : startMatch}>
+            <button className="mode on" onClick={online ? () => conn.current?.send({ t: 'rematch' }) : () => startMatch(practice)}>
               <span>
                 <strong>Play again</strong>
                 {online && <small>{online.room.public ? 'Find a new match with the players still here' : 'Back to the room with the same players'}</small>}
@@ -1115,7 +1153,7 @@ export function App() {
           <button
             className={`mode ${match && match.turn.phase !== 'over' ? '' : 'on'}`}
             disabled={solo && !canWager(stake, progress.coins)}
-            onClick={startMatch}
+            onClick={() => startMatch()}
           >
             <span>
               <strong>Start new match</strong>
@@ -1134,13 +1172,29 @@ export function App() {
             </span>
             <Chevron />
           </button>
-          <button className="mode" onClick={() => (setSheet(null), setTutorial(true))}>
+          <button className="mode" onClick={() => (setSheet(null), setTutorial('lessons'))}>
             <span>
               <strong>Learn by playing</strong>
               <small>Eight guided lessons on the board</small>
             </span>
             <Chevron />
           </button>
+          <button className="mode" onClick={() => (setSheet(null), setTutorial('challenges'))}>
+            <span>
+              <strong>Challenges</strong>
+              <small>Six one-turn puzzles · coins for each first solve</small>
+            </span>
+            <Chevron />
+          </button>
+          {solo && (
+            <button className="mode" onClick={() => startMatch(true)}>
+              <span>
+                <strong>Practice</strong>
+                <small>Solo with no timers and hints · {players} players · no XP, coins or wager</small>
+              </span>
+              <Chevron />
+            </button>
+          )}
           <button className="mode" onClick={() => setSheet('friends')}>
             <span>
               <strong>Friends</strong>
@@ -1182,10 +1236,12 @@ export function App() {
                 </span>
                 <input value={name} maxLength={16} placeholder="Guest" aria-invalid={!!name && !nameCheck.ok} onChange={(e) => rename(e.target.value)} />
               </label>
-              <button className="mode on" onClick={() => enterRoom({ t: 'create', variant, dice: diceCount })}>
+              <button className="mode on" onClick={() => enterRoom({ t: 'create', variant, dice: diceCount, pawns: pawnCount })}>
                 <span>
                   <strong>Create a room</strong>
-                  <small>{variant === 'classic' ? 'Classic Ludo' : `Quick ${VARIANTS[variant].label}`} · you get a code to share</small>
+                  <small>
+                    {variant === 'classic' ? 'Classic Ludo' : `Quick ${VARIANTS[variant].label}`} · {pawnCount} pawns each · up to 8 players · you get a link to share
+                  </small>
                 </span>
                 <Chevron />
               </button>
@@ -1250,7 +1306,11 @@ export function App() {
                 <button className="mode on" disabled={netStatus !== 'connected' || online.room.players.length < 2} onClick={() => conn.current?.send({ t: 'start' })}>
                   <span>
                     <strong>Start match</strong>
-                    <small>{online.room.players.length < 2 ? 'Waiting for another player…' : `${online.room.players.length} players ready`}</small>
+                    <small>
+                      {online.room.players.length < 2 ? 'Waiting for another player…' : `${online.room.players.length} players ready`}
+                      {online.room.capacity ? ` · room for ${online.room.capacity}` : ''}
+                      {online.room.pawns ? ` · ${online.room.pawns} pawns each` : ''}
+                    </small>
                   </span>
                   <Chevron />
                 </button>
@@ -1304,7 +1364,7 @@ export function App() {
 
       {sheet === 'help' && (
         <Sheet title="How to play" onClose={() => setSheet('play')}>
-          <button className="mode on" onClick={() => (setSheet(null), setTutorial(true))}>
+          <button className="mode on" onClick={() => (setSheet(null), setTutorial('lessons'))}>
             <span><strong>Try the interactive tutorial</strong><small>Practice each rule on the board</small></span>
             <Chevron />
           </button>
@@ -1376,7 +1436,11 @@ export function App() {
             ))}
           </div>
           <p className="hint">Progress is saved on this device only. Solo matches earn half of what online matches do.</p>
-          <AccountPanel onChange={setAccount} />
+          {isNativeApp ? (
+            <p className="hint">Google sign-in is available on loodle.online. Your progress in the app is saved on this device.</p>
+          ) : (
+            <AccountPanel onChange={setAccount} />
+          )}
         </Sheet>}
 
       {sheet === 'settings' && (
@@ -1406,10 +1470,42 @@ export function App() {
               ))}
             </div>
           </div>
+          <button className="mode" onClick={() => setSheet('privacy')}>
+            <span>
+              <strong>Privacy</strong>
+              <small>What LOODLE stores and why</small>
+            </span>
+            <Chevron />
+          </button>
+          <button className="mode" onClick={() => setSheet('terms')}>
+            <span>
+              <strong>Terms of use</strong>
+            </span>
+            <Chevron />
+          </button>
+        </Sheet>
+      )}
+
+      {(sheet === 'privacy' || sheet === 'terms') && (
+        <Sheet title={sheet === 'privacy' ? 'Privacy' : 'Terms of use'} onClose={() => setSheet(INITIAL_PAGE ? null : 'settings')}>
+          {sheet === 'privacy' ? <Privacy /> : <Terms />}
         </Sheet>
       )}
     </div>
-    {tutorial && <Tutorial quality={quality} onClose={() => (setTutorial(false), setSheet('play'))} />}
+    {tutorial === 'lessons' && <Tutorial quality={quality} onClose={() => (setTutorial(false), setSheet('play'))} />}
+    {tutorial === 'challenges' && (
+      <Challenges
+        quality={quality}
+        onClose={() => (setTutorial(false), setSheet('play'))}
+        onReward={(coins) =>
+          setProgress((current) => {
+            const paid = { ...current, coins: current.coins + coins };
+            store('loodl.progress', paid);
+            return paid;
+          })
+        }
+      />
+    )}
     </>
   );
 }

@@ -24,3 +24,8 @@ unity-client/[Bb]uild*/
 node_modules/
 dist/
 *.tsbuildinfo
+
+# Android signing keys
+*.jks
+*.keystore
+keystore.properties
