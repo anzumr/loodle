@@ -80,3 +80,21 @@ describe('connecting', () => {
     }
   });
 });
+
+describe('setup with a login that only owns its schema', () => {
+  it('works without permission to create schemas once the schema exists', async () => {
+    const db = new PGlite();
+    // Like docs/SUPABASE.md: the owner creates the schema for a role that cannot create schemas.
+    await db.exec(`
+      create role loodle_app nologin;
+      create schema loodle authorization loodle_app;
+      revoke create on database postgres from public;
+      set role loodle_app;
+    `);
+    const store = createStore(db as unknown as Sql);
+    await store.migrate();
+    await store.save('google:1', { name: 'Alpha' });
+    expect((await store.get('google:1'))?.name).toBe('Alpha');
+    await expect(db.query('create schema other')).rejects.toThrow(/permission denied/);
+  });
+});

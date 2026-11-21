@@ -82,7 +82,14 @@ export function createStore(sql: Sql) {
   return {
     /** Create the schema and table if they are missing. Safe to run on every start. */
     async migrate() {
-      for (const statement of SCHEMA_SQL.split(';').map((s) => s.trim()).filter(Boolean)) await sql.query(statement);
+      // "create schema if not exists" needs permission to create schemas even when the schema
+      // is already there. The production login only owns its schema, so skip that step when
+      // the schema exists (docs/SUPABASE.md creates it during setup).
+      const { rows } = await sql.query("select 1 from pg_namespace where nspname = 'loodle'");
+      for (const statement of SCHEMA_SQL.split(';').map((s) => s.trim()).filter(Boolean)) {
+        if (rows.length && statement.startsWith('create schema')) continue;
+        await sql.query(statement);
+      }
     },
     async get(id: string): Promise<Profile | null> {
       const { rows } = await sql.query<Row>('select name, avatar, progress, wardrobe, challenges, updated_at from loodle.players where id = $1', [id]);
