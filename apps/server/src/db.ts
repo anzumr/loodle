@@ -116,7 +116,17 @@ export type Store = ReturnType<typeof createStore>;
  * server certificate; without it the connection is still encrypted but not verified.
  */
 export function connect(url: string, ca?: string): Sql {
-  const parsed = new URL(url);
+  // Never include the value in errors: it holds the database password and would end up in logs.
+  let parsed: URL;
+  try {
+    parsed = new URL(url.trim());
+  } catch {
+    throw new Error('DATABASE_URL is not a connection string. It should start with postgresql://');
+  }
+  if (parsed.protocol !== 'postgresql:' && parsed.protocol !== 'postgres:')
+    throw new Error('DATABASE_URL should start with postgresql://');
+  if (!parsed.hostname || !parsed.username || !parsed.password)
+    throw new Error('DATABASE_URL is missing the user, password or host');
   parsed.searchParams.delete('sslmode'); // the ssl option below decides
   const local = ['localhost', '127.0.0.1'].includes(parsed.hostname);
   return new pg.Pool({

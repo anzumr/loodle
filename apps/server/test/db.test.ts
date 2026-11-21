@@ -63,3 +63,20 @@ describe('profile store', () => {
     expect(p.challenges).toEqual(['hunter']);
   });
 });
+
+describe('connecting', () => {
+  it('rejects a value that is not a connection string without repeating it', async () => {
+    const { connect } = await import('../src/db');
+    for (const bad of ['justAPasswordValue123', 'https://user:secretValue9@example.com/db', 'postgresql://host-only.example.com/db']) {
+      let message = '';
+      try {
+        connect(bad);
+      } catch (err) {
+        message = (err as Error).message;
+      }
+      expect(message).toMatch(/DATABASE_URL/);
+      expect(message).not.toContain('justAPasswordValue123');
+      expect(message).not.toContain('secretValue9');
+    }
+  });
+});

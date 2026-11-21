@@ -5,7 +5,7 @@
  * It never sees, rolls or influences dice, so difficulty cannot affect fairness.
  */
 import { isSafeTrackIndex } from './layout';
-import { YARD, legalMoves, shapeOf, trackIndexIn, type LegalMove, type MatchState } from './engine';
+import { YARD, legalMoves, shapeOf, sideOf, trackIndexIn, type LegalMove, type MatchState } from './engine';
 
 export const AI_LEVELS = ['beginner', 'easy', 'medium', 'hard', 'expert'] as const;
 export type AiLevel = (typeof AI_LEVELS)[number];
@@ -57,7 +57,7 @@ function threats(state: MatchState, step: number): number {
   if (here === null || isSafeTrackIndex(here)) return 0;
   let count = 0;
   for (const other of state.seats) {
-    if (other === seat) continue;
+    if (sideOf(state, other) === sideOf(state, seat)) continue;
     for (const theirStep of state.pawns[other]!) {
       const there = trackIndexIn(state, other, theirStep);
       if (there === null) continue;
@@ -76,7 +76,7 @@ function targets(state: MatchState, step: number): number {
   if (here === null) return 0;
   let count = 0;
   for (const other of state.seats) {
-    if (other === seat) continue;
+    if (sideOf(state, other) === sideOf(state, seat)) continue;
     for (const theirStep of state.pawns[other]!) {
       const there = trackIndexIn(state, other, theirStep);
       if (there === null || isSafeTrackIndex(there)) continue;
@@ -94,12 +94,11 @@ function score(state: MatchState, move: LegalMove, w: Weights): number {
   for (const c of move.captures) total += w.capture + state.pawns[c.seat]![c.pawn]! * 0.5;
   if (move.finishes) total += w.finish;
   if (move.from === YARD) total += w.enter;
-  // Joining one of our own pawns on the loop makes a safe pair (when that rule is on).
+  // Joining one of our own pawns makes a stack: a rival landing there takes only one of them.
   const pairs = landing !== null && state.pawns[seat]!.some((s, i) => i !== move.pawn && s === move.to);
-  const safePair = pairs && state.config.blockades;
-  if (landing === null || isSafeTrackIndex(landing) || safePair) total += w.safe;
+  if (landing === null || isSafeTrackIndex(landing)) total += w.safe;
   // A pawn far along the path is worth more, so risking it costs more.
-  if (!safePair) total -= threats(state, move.to) * (w.risk + move.to * w.risk * 0.03);
+  total -= threats(state, move.to) * (w.risk + move.to * w.risk * 0.03) * (pairs && state.config.blockades ? 0.5 : 1);
   if (move.from >= 0) total += threats(state, move.from) * (w.escape + move.from * w.escape * 0.03);
   total += targets(state, move.to) * w.chase;
   if (pairs) total += w.blockade;

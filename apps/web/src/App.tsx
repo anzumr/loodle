@@ -23,13 +23,14 @@ import { Die } from './ui/Die';
 import { Tutorial } from './ui/Tutorial';
 import { Challenges } from './ui/Challenges';
 import { Privacy, Terms } from './ui/Legal';
+import { RoomSettings } from './ui/RoomSettings';
 import { isNativeApp, siteOrigin } from './platform';
 import { loadCloud, mergeProfiles, saveCloud, type CloudProfile, type CloudState } from './cloud';
 import { setSolvedChallenges, solvedChallenges } from './challenges';
 import { AccountPanel, type Account } from './ui/AccountPanel';
 import { play, setSoundEnabled, type Sfx } from './sound';
 import { COSMETICS, buyCosmetic, equipCosmetic, sanitizeWardrobe, type Wardrobe } from '@loodl/rules';
-import { chooseLegalMove, diceLeft } from '@loodl/rules';
+import { chooseLegalMove, diceLeft, rollFor, sideOf } from '@loodl/rules';
 import { WAGER_STAKES, canWager, wagerMultiplier } from '@loodl/rules';
 import { ACHIEVEMENTS, AVATAR_COUNT, applyMatch, challengesFor, cleanAvatar, levelFor, sanitizeProgress, validateUsername, type Progress, type Reward } from '@loodl/rules';
 import { AVATAR_NAMES, Avatar } from './ui/Avatar';
@@ -62,7 +63,8 @@ const HOW_TO_PLAY = [
   'Tap a glowing pawn to move it forward by the number you rolled.',
   'Land on an opponent to send that pawn back to its yard. You roll again.',
   'Pawns on a star or on any coloured start square are safe.',
-  'Two of your pawns on one square are a safe pair: opponents can pass or share it but cannot capture them.',
+  'Your pawns can stack on one square. A rival landing on a stack captures only one of them.',
+  'If none of your pawns are out, your third roll in a row is always a six.',
   'A six gives you another roll, but a third six in a row ends your turn with no move.',
   'Travel once around the board, up your coloured lane, and land on the centre with the exact number.',
 ];
@@ -194,6 +196,8 @@ export function App() {
   const saved = useMemo(loadSaved, []);
   const [players, setPlayers] = useState(4);
   const [pawnCount, setPawnCount] = useState<2 | 3 | 4>(4);
+  /** 1v1 only: one yard each, or two (each player moves two colours). */
+  const [yardsEach, setYardsEach] = useState<1 | 2>(1);
   const [diceCount, setDiceCount] = useState<1 | 2>(() => {
     try {
       return localStorage.getItem('loodl.dice') === '2' ? 2 : 1;
@@ -339,12 +343,13 @@ export function App() {
   };
   /** What this player has done in the current match, for rewards. */
   const tally = useRef({ captures: 0, sixes: 0 });
-  const mySeat = useRef<Seat | null>(null);
+  /** Seats this player controls for rewards: one, or two in 1v1 with two yards each. */
+  const mySeats = useRef<Seat[]>([]);
   const rewardedMatch = useRef<MatchState | null>(null);
   const countEvents = (events: GameEvent[]) => {
     for (const e of events) {
-      if (e.type === 'rolled' && e.seat === mySeat.current) tally.current.sixes += (e.value === 6 ? 1 : 0) + (e.value2 === 6 ? 1 : 0);
-      if (e.type === 'captured' && e.by === mySeat.current) tally.current.captures++;
+      if (e.type === 'rolled' && mySeats.current.includes(e.seat)) tally.current.sixes += (e.value === 6 ? 1 : 0) + (e.value2 === 6 ? 1 : 0);
+      if (e.type === 'captured' && mySeats.current.includes(e.by)) tally.current.captures++;
     }
   };
   // ---------- cloud saves ----------
@@ -485,7 +490,8 @@ export function App() {
         setNow(Date.now());
         setCode(m.room.code);
         setNetError('');
-        const mine = m.room.players[m.you]?.seat;
+        const me = m.room.players[m.you];
+        const mine = me?.seat;
         if (!m.room.match || mine === null || mine === undefined) {
           // Waiting room: before the first match, or back here after a rematch.
           setMatch(null);
@@ -493,7 +499,7 @@ export function App() {
           setSheet('friends');
           return;
         }
-        setHumans([mine]);
+        setHumans(me?.seats?.length ? me.seats : [mine]);
         setMatch(m.room.match);
         setSheet(null);
         setScreen('board');
@@ -585,8 +591,8 @@ export function App() {
     setRolling(true);
     setMessage('');
     play('roll');
-    const value = rollDie();
-    const value2 = match.config.dice === 2 ? rollDie() : undefined;
+    // The mercy rule decides the roll when it is due; otherwise these are fair dice.
+    const { value, value2 } = rollFor(match, { roll: rollDie });
     window.setTimeout(() => {
       // The match may have been quit or replaced during the roll animation.
       if (matchRef.current !== match) return setRolling(false);
@@ -697,8 +703,7 @@ export function App() {
         let events: GameEvent[] = [];
         for (let guard = 0; guard < 60 && state.turn.seat === seat && state.turn.phase !== 'over'; guard++) {
           if (state.turn.phase === 'roll') {
-            const value = rollDie();
-            const value2 = state.config.dice === 2 ? rollDie() : undefined;
+            const { value, value2 } = rollFor(state, { roll: rollDie });
             setFace(value);
             if (value2 !== undefined) setFace2(value2);
             ({ state, events } = applyAction(state, { type: 'roll', seat, value, value2 }));
@@ -752,7 +757,10 @@ export function App() {
 
   const startMatch = (practiceMode = false) => {
     setPractice(practiceMode);
-    const fresh = createMatch({ players, config: { ...VARIANTS[variant].rules, pawnsPerPlayer: pawnCount, dice: diceCount } });
+    const twoYards = players === 2 && yardsEach === 2;
+    const fresh = twoYards
+      ? createMatch({ players: 4, config: { ...CLASSIC_RULES, pawnsPerPlayer: pawnCount, dice: diceCount, sides: [0, 1, 0, 1] } })
+      : createMatch({ players, config: { ...VARIANTS[variant].rules, pawnsPerPlayer: pawnCount, dice: diceCount } });
     tally.current = { captures: 0, sixes: 0 };
     setReward(null);
     setWagerResult(null);
@@ -764,7 +772,8 @@ export function App() {
       store('loodl.progress', paid);
       setWager({ stake, multiplier: wagerMultiplier(level, players) });
     } else setWager(null);
-    setHumans(solo ? [fresh.seats[0]!] : fresh.seats);
+    // Solo: you play the first side (both its colours in 1v1 with two yards each).
+    setHumans(solo ? fresh.seats.filter((x) => sideOf(fresh, x) === sideOf(fresh, fresh.seats[0]!)) : fresh.seats);
     setMatch(fresh);
     setMessage('');
     setSheet(null);
@@ -773,14 +782,20 @@ export function App() {
 
   // Rewards: online matches and solo matches against the computer. Pass & Play earns nothing,
   // because one person controls every seat.
+  /** One person playing one side: a single seat, or both seats of a side in 1v1 with two yards. */
+  const soloSide = (m: MatchState | null, seats: Seat[]) =>
+    !!m && seats.length > 0 && (seats.length === 1 || (!!m.config.sides && seats.every((x) => sideOf(m, x) === sideOf(m, seats[0]!))));
   useEffect(() => {
-    mySeat.current = humans.length === 1 ? humans[0]! : null;
-  }, [humans]);
+    mySeats.current = soloSide(match, humans) ? humans : [];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [humans, match?.config.sides]);
   useEffect(() => {
     if (!match || match.turn.phase !== 'over' || rewardedMatch.current === match) return;
     rewardedMatch.current = match;
-    const seat = humans.length === 1 ? humans[0]! : null;
-    const place = seat === null ? 0 : match.finishOrder.indexOf(seat) + 1;
+    const seat = soloSide(match, humans) ? humans[0]! : null;
+    // With sides, places are by side: the winner's side is 1st.
+    const place =
+      seat === null ? 0 : match.config.sides ? (sideOf(match, match.finishOrder[0]!) === sideOf(match, seat) ? 1 : 2) : match.finishOrder.indexOf(seat) + 1;
     if (seat === null || place === 0 || match.seats.length < 2 || (practice && !online)) return setReward(null);
     const payout = !online && wager ? (place === 1 ? Math.floor(wager.stake * wager.multiplier) : 0) : 0;
     setWagerResult(!online && wager ? { stake: wager.stake, payout } : null);
@@ -792,10 +807,10 @@ export function App() {
         id: online ? `online:${online.room.code}:${match.version}` : `solo:${Date.now()}`,
         kind: online ? 'online' : 'solo',
         variant: variantOf,
-        players: match.seats.length,
+        players: match.config.sides ? new Set(match.seats.map((x) => sideOf(match, x))).size : match.seats.length,
         place,
         captures: tally.current.captures,
-        pawnsHome: match.pawns[seat]!.filter((p) => p === finishStepOf(match)).length,
+        pawnsHome: humans.reduce<number>((n, h) => n + match.pawns[h]!.filter((p) => p === finishStepOf(match)).length, 0),
         sixes: tally.current.sixes,
         aiLevel: online ? undefined : level,
       },
@@ -1167,6 +1182,21 @@ export function App() {
               ))}
             </div>
           </div>
+          {players === 2 && (
+            <div className="setting">
+              <span>
+                <strong>Yards each</strong>
+                <small>{yardsEach === 2 ? 'Each player moves two colours · Classic rules' : 'One colour each'}</small>
+              </span>
+              <div className="segmented" role="group" aria-label="Yards per player">
+                {([1, 2] as const).map((n) => (
+                  <button key={n} className={yardsEach === n ? 'on' : ''} aria-pressed={yardsEach === n} onClick={() => setYardsEach(n)}>
+                    {n}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="setting">
             <span>
               <strong>Pawns each</strong>
@@ -1239,7 +1269,8 @@ export function App() {
             <span>
               <strong>Start new match</strong>
               <small>
-                {VARIANTS[variant].label} · {players} players{solo ? ` · ${level}` : ''}
+                {players === 2 && yardsEach === 2 ? 'Classic · 1v1, two yards each' : `${VARIANTS[variant].label} · ${players} players`}
+                {solo ? ` · ${level}` : ''}
                 {solo && stake > 0 ? ` · ${stake}-coin wager` : ''}
                 {match && match.turn.phase !== 'over' && wager ? ` · your current ${wager.stake}-coin wager is lost` : ''}
               </small>
@@ -1383,6 +1414,7 @@ export function App() {
                   <small>{pl.bot ? 'Bot' : !pl.connected ? 'Disconnected' : online.room.public ? 'Ready' : i === online.room.host ? 'Host' : 'Joined'}</small>
                 </div>
               ))}
+              <RoomSettings room={online.room} isHost={online.you === online.room.host} send={(msg) => conn.current?.send(msg)} />
               {online.room.public ? null : online.you === online.room.host ? (
                 <button className="mode on" disabled={netStatus !== 'connected' || online.room.players.length < 2} onClick={() => conn.current?.send({ t: 'start' })}>
                   <span>

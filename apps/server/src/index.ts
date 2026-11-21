@@ -7,6 +7,7 @@
  *
  * Client → server:  create {token,name,variant,dice,pawns} | join {token,name,code} | quick {token,name,variant,dice}
  *                    | start | roll | move {pawn} | rematch | leave
+ *                    | settings {variant?,dice?,pawns?,yards?,timer?} | addBot | removeBot   (host, private room, before the start)
  * Server → client:  room {room, you, events} | error {message}
  */
 import { randomInt } from 'node:crypto';
@@ -30,8 +31,8 @@ const auth = createAuth({ clientId: process.env.GOOGLE_CLIENT_ID, secret: proces
 // Cloud saves for signed-in players. Without DATABASE_URL profiles stay on each device.
 let store: Store | null = null;
 if (process.env.DATABASE_URL) {
-  const candidate = createStore(connect(process.env.DATABASE_URL, process.env.DATABASE_CA));
   try {
+    const candidate = createStore(connect(process.env.DATABASE_URL, process.env.DATABASE_CA));
     await candidate.migrate();
     store = candidate;
     console.log('Cloud saves: database connected');
@@ -104,6 +105,9 @@ function handle(socket: WebSocket, msg: Record<string, unknown>, request: Incomi
   if (!session) throw new RoomError('Join a room first');
   const { room, token } = session;
   if (msg.t === 'start') return room.start(token), broadcast(room);
+  if (msg.t === 'settings') return room.configure(token, msg.settings), broadcast(room);
+  if (msg.t === 'addBot') return room.addBot(token), broadcast(room);
+  if (msg.t === 'removeBot') return room.removeBot(token), broadcast(room);
   if (msg.t === 'roll') return broadcast(room, room.roll(token));
   if (msg.t === 'move') return broadcast(room, room.move(token, msg.pawn, msg.die));
   if (msg.t === 'rematch') return room.rematch(token), broadcast(room);

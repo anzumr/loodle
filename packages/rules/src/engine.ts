@@ -16,6 +16,8 @@ export const FINISH_STEP = PATH_LENGTH - 1;
 export const LAST_SHARED_STEP = TRACK_LENGTH - 2;
 /** LOCKED RULE: the third consecutive six ends the turn with no move. */
 export const SIX_LIMIT = 3;
+/** Mercy rule: the roll that is guaranteed a six, counting rolls with every pawn in the yard. */
+export const MERCY_TRIES = 3;
 
 export interface RulesConfig {
   pawnsPerPlayer: 2 | 3 | 4;
@@ -28,11 +30,22 @@ export interface RulesConfig {
   /** If one move earns several bonuses (e.g. a six that captures), grant each. */
   stackBonuses: boolean;
   /**
-   * Safe pairs: two or more pawns of one colour on a shared square cannot be captured.
-   * Opponents may still pass or share the square. Off: a pawn landing there captures them all.
-   * (The key keeps its old name so saved matches still load.)
+   * Stacks: pawns of one colour may share a square. A different colour landing there
+   * captures only one pawn of that stack. Off: the lander captures the whole stack.
+   * Nothing ever blocks movement. (The key keeps its old name so saved matches load.)
    */
   blockades: boolean;
+  /**
+   * Mercy rule: while none of a seat's pawns are out (every unfinished pawn is in the
+   * yard), its third roll in a row without a six is a six. With two dice, one die is a six.
+   */
+  mercy: boolean;
+  /**
+   * Sides: who plays which seats, as a side number per seat (index = seat). Seats on the
+   * same side never capture each other, and the first side to bring all its seats home
+   * wins. null: every seat plays for itself. Used by 1v1 with two colours each.
+   */
+  sides: number[] | null;
   /** Arms on the board: 4 is the classic board, 5-8 the larger star boards. */
   boardSeats: number;
   /** Pawns that begin on the start square instead of in the yard (Quick modes). */
@@ -60,6 +73,8 @@ export const CLASSIC_RULES: RulesConfig = {
   bonusOnFinish: true,
   stackBonuses: false,
   blockades: true,
+  mercy: true,
+  sides: null,
   boardSeats: 4,
   startOnBoard: 0,
   pawnsToWin: null,
@@ -118,6 +133,8 @@ export interface MatchState {
   scores: number[];
   /** Number of actions applied so far. */
   version: number;
+  /** Mercy rule: rolls in a row without a six while all of a seat's pawns are in the yard (index = seat). */
+  yardTries?: number[];
 }
 
 export type Action =
@@ -193,6 +210,15 @@ export function createMatch(options: { players?: number; seats?: Seat[]; config?
   if (config.pawnsToWin !== null && !whole(config.pawnsToWin, 1, config.pawnsPerPlayer)) throw new RuleError('Invalid pawns needed to win');
   if (config.targetScore !== null && !whole(config.targetScore, 1, 1000)) throw new RuleError('Invalid target score');
   if (!whole(config.capturePoints, 0, 100) || !whole(config.homePoints, 0, 100)) throw new RuleError('Invalid points');
+  config.mercy ??= false; // saved matches from before the mercy rule keep playing without it
+  config.sides ??= null;
+  if (config.sides !== null) {
+    const sides = config.sides;
+    if (!Array.isArray(sides) || sides.length !== boardSeats || seats.some((s) => !Number.isInteger(sides[s]) || sides[s]! < 0))
+      throw new RuleError('Every seat needs a side');
+    if (new Set(seats.map((s) => sides[s])).size < 2) throw new RuleError('Sides need at least two teams');
+    if (config.endOnFirstFinish || config.targetScore !== null) throw new RuleError('Sides are played with classic rules');
+  }
   return {
     config,
     seats,
@@ -203,6 +229,7 @@ export function createMatch(options: { players?: number; seats?: Seat[]; config?
     finishOrder: [],
     scores: boardIndexes.map(() => 0),
     version: 0,
+    yardTries: boardIndexes.map(() => 0),
   };
 }
 
@@ -219,18 +246,48 @@ export const trackIndexIn = (state: MatchState, seat: Seat, step: number): numbe
 const pawnsOn = (state: MatchState, seat: Seat, trackIndex: number): number[] =>
   state.pawns[seat]!.flatMap((step, pawn) => (trackIndexIn(state, seat, step) === trackIndex ? [pawn] : []));
 
-const opponentsOf = (state: MatchState, seat: Seat) => state.seats.filter((s) => s !== seat);
+/** The side a seat plays for. Without sides every seat is its own side. */
+export const sideOf = (state: MatchState, seat: Seat): number => state.config.sides?.[seat] ?? 100 + seat;
+
+const opponentsOf = (state: MatchState, seat: Seat) => state.seats.filter((s) => sideOf(state, s) !== sideOf(state, seat));
 
 /**
- * Pawns an opponent could capture on a square. With safe pairs on, two or more pawns
- * of one colour sharing a square protect each other; they never block anyone.
+ * Pawns captured by landing on a square: from each opposing colour there, one pawn of
+ * its stack (with stacks on) or all of them (stacks off).
  */
 const capturableOn = (state: MatchState, mover: Seat, trackIndex: number): PawnRef[] =>
   opponentsOf(state, mover).flatMap((s) => {
     const here = pawnsOn(state, s, trackIndex);
-    if (state.config.blockades && here.length >= 2) return [];
-    return here.map((p) => ({ seat: s, pawn: p }));
+    return (state.config.blockades ? here.slice(0, 1) : here).map((p) => ({ seat: s, pawn: p }));
   });
+
+/** True when none of the seat's pawns are out: every unfinished pawn is in the yard. */
+export const allInYard = (state: MatchState, seat: Seat): boolean => {
+  const finish = finishStepOf(state);
+  const left = state.pawns[seat]!.filter((p) => p !== finish);
+  return left.length > 0 && left.every((p) => p === YARD);
+};
+
+/** Mercy rule: whether the next roll of the seat to play must contain a six. */
+export const mercySixDue = (state: MatchState): boolean =>
+  !!state.config.mercy &&
+  state.turn.phase === 'roll' &&
+  allInYard(state, state.turn.seat) &&
+  (state.yardTries?.[state.turn.seat] ?? 0) >= MERCY_TRIES - 1;
+
+/** Roll for the seat to play, honouring the mercy rule. Online the server uses this; offline the app does. */
+export function rollFor(state: MatchState, dice: Dice): { value: number; value2?: number } {
+  const value = mercySixDue(state) ? 6 : dice.roll();
+  return state.config.dice === 2 ? { value, value2: dice.roll() } : { value };
+}
+
+/** Count a roll toward the mercy rule. Call before the roll is applied. */
+function trackYardTries(state: MatchState, values: number[]) {
+  if (!state.config.mercy) return;
+  const seat = state.turn.seat;
+  const tries = (state.yardTries ??= state.pawns.map(() => 0));
+  tries[seat] = allInYard(state, seat) && !values.includes(6) ? (tries[seat] ?? 0) + 1 : 0;
+}
 
 /** Dice still waiting to be used this roll. */
 export const diceLeft = (state: MatchState): number[] =>
@@ -269,6 +326,7 @@ const clone = (s: MatchState): MatchState => ({
   finishOrder: [...s.finishOrder],
   scores: [...s.scores],
   version: s.version,
+  ...(s.yardTries ? { yardTries: [...s.yardTries] } : {}),
 });
 
 function passTurn(state: MatchState, events: GameEvent[]) {
@@ -398,6 +456,25 @@ function applyMove(state: MatchState, pawn: number, events: GameEvent[], chosen?
     return;
   }
 
+  if (seatDone && state.config.sides) {
+    // Sides: the first side with every seat home wins; everyone else is ranked by distance.
+    state.finishOrder.push(seat);
+    events.push({ type: 'seatFinished', seat, place: state.finishOrder.length });
+    const side = sideOf(state, seat);
+    if (state.seats.filter((s) => sideOf(state, s) === side).every((s) => state.finishOrder.includes(s))) {
+      // Winning side first (in the order its seats got home), then the others: those
+      // already home in order, then the rest by pawns home and distance travelled.
+      const progress = (s: Seat) => state.pawns[s]!.reduce((sum, step) => sum + step, 0);
+      const winners = state.finishOrder.filter((s) => sideOf(state, s) === side);
+      const finishedOthers = state.finishOrder.filter((s) => sideOf(state, s) !== side);
+      const rest = state.seats.filter((s) => !state.finishOrder.includes(s));
+      rest.sort((a, b) => homeCount(b) - homeCount(a) || progress(b) - progress(a));
+      state.finishOrder = [...winners, ...finishedOthers, ...rest];
+      endMatch();
+    } else passTurn(state, events);
+    return;
+  }
+
   if (seatDone) {
     state.finishOrder.push(seat);
     events.push({ type: 'seatFinished', seat, place: state.finishOrder.length });
@@ -441,10 +518,12 @@ export function applyAction(prev: MatchState, action: Action): { state: MatchSta
     if (prev.turn.phase !== 'roll') throw new RuleError('A pawn must be moved before rolling again');
     const face = (n: unknown) => typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= 6;
     if (!face(action.value)) throw new RuleError('Die must be 1 to 6');
-    if (state.config.dice === 2) {
-      if (!face(action.value2)) throw new RuleError('This game rolls two dice');
-      applyRoll2(state, action.value, action.value2!, events);
-    } else applyRoll(state, action.value, events);
+    if (state.config.dice === 2 && !face(action.value2)) throw new RuleError('This game rolls two dice');
+    const values = state.config.dice === 2 ? [action.value, action.value2!] : [action.value];
+    if (mercySixDue(state) && !values.includes(6)) throw new RuleError('Mercy rule: this roll is a six');
+    trackYardTries(state, values);
+    if (state.config.dice === 2) applyRoll2(state, action.value, action.value2!, events);
+    else applyRoll(state, action.value, events);
   } else if (action.type === 'move') {
     if (prev.turn.phase !== 'move') throw new RuleError('Roll the die first');
     applyMove(state, action.pawn, events, action.die);
@@ -488,7 +567,9 @@ export function deserializeMatch(json: string): MatchState {
     throw new RuleError(`Invalid saved match: ${why}`);
   };
   if (!s || typeof s !== 'object' || !s.config || !s.turn || !Array.isArray(s.seats) || !Array.isArray(s.pawns)) fail('shape');
-  const fresh = createMatch({ seats: s.seats, config: s.config }); // validates seats and config
+  // Rules added later stay off for matches saved before them.
+  const config = { ...s.config, mercy: s.config.mercy ?? false, sides: s.config.sides ?? null };
+  const fresh = createMatch({ seats: s.seats, config }); // validates seats and config
   if (s.pawns.length !== fresh.pawns.length) fail('pawn lists');
   s.pawns.forEach((list, seat) => {
     if (!Array.isArray(list) || list.length !== fresh.pawns[seat]!.length) fail('pawn count');
@@ -505,5 +586,10 @@ export function deserializeMatch(json: string): MatchState {
   if (!Array.isArray(s.finishOrder) || s.finishOrder.some((x) => !s.seats.includes(x))) fail('finish order');
   if (!Array.isArray(s.scores) || s.scores.length !== fresh.scores.length || s.scores.some((n) => !Number.isInteger(n) || n < 0)) fail('scores');
   if (!Number.isInteger(s.version) || s.version < 0) fail('version');
+  if (
+    s.yardTries !== undefined &&
+    (!Array.isArray(s.yardTries) || s.yardTries.length !== fresh.pawns.length || s.yardTries.some((n) => !Number.isInteger(n) || n < 0))
+  )
+    fail('yard tries');
   return { ...clone(s), config: fresh.config };
 }

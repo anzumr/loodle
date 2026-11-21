@@ -114,7 +114,7 @@ describe('rematch', () => {
     room.rematch(token(1));
     const view = room.view();
     expect(view.match).toBeNull();
-    expect(view.players).toEqual([{ name: 'Alex', avatar: 0, seat: null, connected: true, bot: false }]);
+    expect(view.players).toEqual([{ name: 'Alex', avatar: 0, seat: null, seats: [], connected: true, bot: false }]);
     expect(room.joinable).toBe(true);
   });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  rollFor,
   CLASSIC_RULES,
   FINISH_STEP,
   QUICK_CLASH_RULES,
@@ -27,7 +28,7 @@ function playOut(seed: number, config: RulesConfig, players = 4) {
   let actions = 0;
   while (state.turn.phase !== 'over') {
     if (++actions > 20000) throw new Error('match did not finish');
-    state = state.turn.phase === 'roll' ? roll(state, dice.roll()).state : move(state, chooseMove(state, 'medium', random)).state;
+    state = state.turn.phase === 'roll' ? roll(state, rollFor(state, dice).value).state : move(state, chooseMove(state, 'medium', random)).state;
   }
   return { state, actions };
 }

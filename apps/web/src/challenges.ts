@@ -39,7 +39,7 @@ const RED: Seat = 0;
 const YELLOW: Seat = 2;
 const HOME = 56;
 
-/** Red pawns an opponent could land on next turn: on the shared loop, not on a safe square, not in a pair. */
+/** Lone red pawns an opponent could land on next turn: on the shared loop, not on a safe square, not stacked. */
 export function redInDanger(match: MatchState): number[] {
   const lastShared = 50;
   return match.pawns[RED]!.flatMap((step, pawn) => {
@@ -101,13 +101,13 @@ export const CHALLENGES: readonly Challenge[] = [
   {
     id: 'strength-in-numbers',
     title: 'Strength in numbers',
-    brief: 'Both your pawns are in reach of yellow. Keep them both safe.',
+    brief: 'Both your pawns are in reach of yellow. Leave neither of them standing alone.',
     dice: [4],
     red: [20, 24, -1, -1],
     yellow: [44, -1, -1, -1], // track 18, threatens 19-24
     goal: (m) => redInDanger(m).length === 0,
     atTurnEnd: true,
-    win: 'A safe pair! Two pawns of one colour on a square cannot be captured.',
+    win: 'A stack! A rival landing on it can take only one of them, never both.',
     hint: 'Moving away leaves the other pawn alone. What if they shared a square?',
     coins: 20,
   },

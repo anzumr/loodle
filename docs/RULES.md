@@ -19,7 +19,9 @@ Code: `packages/rules/src/engine.ts`. Tests: `packages/rules/test/engine.test.ts
 | `bonusOnCapture` | on | off |
 | `bonusOnFinish` | **on** (owner request, 2026-11-17): bringing a pawn home grants another roll | off |
 | `stackBonuses` | **off**: a six that also captures earns one extra roll | on: it earns two |
-| `blockades` (safe pairs) | **on** (owner request, 2026-11-17): two or more pawns of one colour on a shared square cannot be captured. They never block: opponents may pass or share the square | off: a pawn landing there captures them all |
+| `blockades` (stacks) | **on** (owner request, 2026-11-21): pawns of one colour may share a square; a different colour landing there captures **one** pawn of that stack. Nothing blocks movement | off: the lander captures the whole stack |
+| `mercy` | **on** (owner request, 2026-11-21): while none of a seat's pawns are out (every unfinished pawn in the yard), its third roll in a row without a six is a six; with two dice, one die is the six. The count runs across turns and resets on any six or when a pawn is out | off |
+| `sides` | null: everyone plays for themselves | 1v1 with two yards each: `[0, 1, 0, 1]` (red+yellow vs green+blue). Teammates' colours never capture each other; the first side with all its colours home wins |
 
 ## Interpretations I chose where the handoff was silent
 
@@ -28,7 +30,7 @@ These are implemented as fixed behaviour today. Each is a single small change if
 1. **Safe squares are the four start squares and the four stars.** Nothing is ever captured there, including an opponent sitting on your start square when you enter. Different colours can share a safe square.
 2. **A six with no legal move still grants another roll** (and counts toward three sixes).
 3. **A capture's extra roll after a non-six starts the six count from zero.** Only sixes rolled back to back count.
-4. **Nothing blocks movement.** A pawn may enter, pass or land beside an opposing safe pair. A lone pawn of a third colour on that square can still be captured.
+4. **Nothing blocks movement.** A pawn may enter, pass or land on any square. Landing on a square with several other colours takes one pawn from each of them. Start squares and stars stay safe.
 5. **Home lanes are private.** No captures there.
 6. **A player who brings their last pawn home stops rolling**, even if that move was a six. Play continues for the others until one player is left; that player takes last place.
 7. **Two-player matches seat red and yellow** (opposite corners). Three players use red, green, yellow.
@@ -50,6 +52,15 @@ Picked per match (Dice: 1 or 2 in the mode menu); setting `dice: 2`. Works with 
 - **A double earns another roll** (instead of every six). A capture or a pawn home also earns one, but at most one extra roll per roll unless `stackBonuses` is on.
 - **A third double in a row ends the turn at once with no move**, earlier moves standing. This mirrors the locked three-sixes rule; the one-die game is unchanged.
 - Measured with medium AI, two dice make matches shorter: at 4 players about 78 rolls each instead of 139.
+
+## Mercy rule details
+
+- Dice values still travel in roll actions. When the mercy six is due, `mercySixDue(state)` is true and the engine rejects any roll without a six, so a client cannot dodge it and a server cannot forget it. `rollFor(state, dice)` produces a correct roll and is used by the server, the offline game and the tests.
+- Saved matches from before the rule keep playing without it.
+
+## 1v1 with two yards each
+
+Offline: pick 2 players, then Yards each: 2. Online: the host of a private room with exactly two players picks it in the room rules. Always Classic rules. Turn order alternates players (red, green, yellow, blue). Results list the winner's two colours first.
 
 ## Coin wagers (solo only)
 

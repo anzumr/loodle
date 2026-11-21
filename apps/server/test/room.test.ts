@@ -177,3 +177,81 @@ describe('two-dice rooms', () => {
     expect(room.view().match!.version).toBe(m.version + 1);
   });
 });
+
+describe('host lobby settings', () => {
+  const host = () => {
+    const room = new Room('HOST1', 'classic', seededDice(11));
+    room.join(A, 'Alex');
+    room.join(B, 'Emma');
+    return room;
+  };
+
+  it('lets only the host change the rules, and only before the start', () => {
+    const room = host();
+    room.configure(A, { variant: 'race', dice: 2, pawns: 3, timer: 'relaxed' });
+    expect(room.view().settings).toEqual({ variant: 'race', dice: 2, pawns: 3, yards: 1, timer: 'relaxed' });
+    expect(() => room.configure(B, { dice: 1 })).toThrow(RoomError);
+    expect(() => room.configure(A, { dice: 3 })).toThrow(RoomError);
+    expect(() => room.configure(A, { variant: 'chess' })).toThrow(RoomError);
+    room.start(A);
+    expect(room.view().match?.config).toMatchObject({ dice: 2, pawnsPerPlayer: 3, endOnFirstFinish: true });
+    expect(() => room.configure(A, { dice: 1 })).toThrow(RoomError);
+  });
+
+  it('refuses changes to Quick Play rooms', () => {
+    const room = new Room('QUICK', 'classic', seededDice(1), true);
+    room.join(A, 'Alex');
+    expect(() => room.configure(A, { dice: 2 })).toThrow(RoomError);
+    expect(() => room.addBot(A)).toThrow(RoomError);
+  });
+
+  it('adds and removes bots, which play their own turns and stay for a rematch', () => {
+    const room = new Room('BOTS1', 'classic', seededDice(4));
+    room.join(A, 'Alex');
+    room.addBot(A);
+    room.addBot(A);
+    room.removeBot(A);
+    expect(room.view().players.map((p) => p.bot)).toEqual([false, true]);
+    expect(() => room.addBot(B)).toThrow(RoomError);
+    room.start(A);
+    let now = Date.now();
+    for (let guard = 0; room.view().match!.turn.phase !== 'over'; guard++) {
+      if (guard > 20000) throw new Error('match did not finish');
+      now += 30_000;
+      room.tick(now); // the server plays every seat, the absent host's too
+    }
+    room.rematch(A);
+    expect(room.view().players.map((p) => p.bot)).toEqual([false, true]);
+  });
+
+  it('plays 1v1 with two yards each: each player moves two colours', () => {
+    const room = host();
+    room.configure(A, { yards: 2 });
+    room.start(A);
+    const view = room.view();
+    expect(view.players.map((p) => p.seats)).toEqual([[0, 2], [1, 3]]);
+    expect(view.match?.config.sides).toEqual([0, 1, 0, 1]);
+    // The host moves both red and yellow; the guest neither.
+    for (let guard = 0; room.view().match!.turn.phase !== 'over'; guard++) {
+      if (guard > 20000) throw new Error('match did not finish');
+      const m = room.view().match!;
+      const who = m.turn.seat % 2 === 0 ? A : B;
+      const other = who === A ? B : A;
+      if (m.turn.phase === 'roll') {
+        expect(() => room.roll(other)).toThrow(RoomError);
+        room.roll(who);
+      } else room.move(who, legalMoves(m)[0]!.pawn, legalMoves(m)[0]!.die);
+    }
+    const order = room.view().match!.finishOrder;
+    expect(order[0]! % 2).toBe(order[1]! % 2); // one player's two colours come first
+  });
+
+  it('uses one yard each when the room does not have exactly two players', () => {
+    const room = host();
+    room.join(C, 'Third');
+    room.configure(A, { yards: 2 });
+    room.start(A);
+    expect(room.view().match?.config.sides).toBeNull();
+    expect(room.view().players.map((p) => p.seats.length)).toEqual([1, 1, 1]);
+  });
+});

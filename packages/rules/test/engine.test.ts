@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  rollFor,
   FINISH_STEP,
   RuleError,
   TRACK,
@@ -203,38 +204,41 @@ describe('captures and safe squares', () => {
   });
 });
 
-describe('safe pairs', () => {
+describe('stacks', () => {
   // Two green pawns on green step 3 = track 16.
-  const wall = { 1: [3, 3, YARD, YARD] };
+  const stack = { 1: [3, 3, YARD, YARD] };
 
-  it('lets opponents land on a pair without capturing it', () => {
-    const { state, events } = play(setup({ ...wall, 0: [12, YARD, YARD, YARD] }), 4, 'm0');
-    expect(types(events)).not.toContain('captured');
+  it('lets a colour stack its pawns', () => {
+    const s = play(setup({ 0: [12, 16, YARD, YARD] }), 4).state;
+    expect(legalMoves(s).map((m) => [m.pawn, m.to])).toContainEqual([0, 16]);
+  });
+
+  it('captures only one pawn when a different colour lands on a stack', () => {
+    const { state, events } = play(setup({ ...stack, 0: [12, YARD, YARD, YARD] }), 4, 'm0');
+    expect(events.filter((e) => e.type === 'captured')).toHaveLength(1);
     expect(state.pawns[0]![0]).toBe(16);
-    expect(state.pawns[1]).toEqual([3, 3, YARD, YARD]);
-    expect(state.turn.seat).toBe(1); // no capture, so no extra roll
+    expect(state.pawns[1]!.filter((p) => p === 3)).toHaveLength(1);
+    expect(state.turn).toMatchObject({ seat: 0, phase: 'roll' }); // a capture earns another roll
   });
 
-  it('never blocks: opponents can pass a pair', () => {
-    const s = play(setup({ ...wall, 0: [12, YARD, YARD, YARD] }), 5).state;
+  it('never blocks: opponents can pass a stack and enter beside one', () => {
+    const s = play(setup({ ...stack, 0: [12, YARD, YARD, YARD] }), 5).state;
     expect(legalMoves(s).map((m) => m.to)).toEqual([17]);
-  });
-
-  it('lets a pawn enter even when a pair sits on its start square', () => {
     const { state } = play(setup({ 1: [39, 39, YARD, YARD] }), 6, 'm0');
     expect(state.pawns[0]![0]).toBe(0);
-    expect(state.pawns[1]).toEqual([39, 39, YARD, YARD]);
+    expect(state.pawns[1]).toEqual([39, 39, YARD, YARD]); // start squares stay safe
   });
 
-  it('still captures a lone pawn of another colour sharing the square', () => {
-    const s = setup({ ...wall, 2: [42, YARD, YARD, YARD], 0: [12, YARD, YARD, YARD] }); // yellow step 42 = track 16
-    const { state } = play(s, 4, 'm0');
-    expect(state.pawns[1]).toEqual([3, 3, YARD, YARD]);
+  it('takes one pawn from each different colour on the square', () => {
+    const s = setup({ ...stack, 2: [42, YARD, YARD, YARD], 0: [12, YARD, YARD, YARD] }); // yellow step 42 = track 16
+    const { state, events } = play(s, 4, 'm0');
+    expect(events.filter((e) => e.type === 'captured').map((e) => e.type === 'captured' && e.seat).sort()).toEqual([1, 2]);
+    expect(state.pawns[1]!.filter((p) => p === 3)).toHaveLength(1);
     expect(state.pawns[2]![0]).toBe(YARD);
   });
 
-  it('can be switched off, in which case a lone landing pawn captures both', () => {
-    const { state } = play(setup({ ...wall, 0: [12, YARD, YARD, YARD] }, { config: { blockades: false } }), 4, 'm0');
+  it('can be switched off, in which case the lander captures the whole stack', () => {
+    const { state } = play(setup({ ...stack, 0: [12, YARD, YARD, YARD] }, { config: { blockades: false } }), 4, 'm0');
     expect(state.pawns[1]).toEqual([YARD, YARD, YARD, YARD]);
   });
 });
@@ -321,7 +325,7 @@ describe('full simulated matches', () => {
       if (log.length > 20000) throw new Error('match did not finish');
       const seat = state.turn.seat;
       let action: Action;
-      if (state.turn.phase === 'roll') action = { type: 'roll', seat, value: dice.roll() };
+      if (state.turn.phase === 'roll') action = { type: 'roll', seat, ...rollFor(state, dice) };
       else {
         const moves = legalMoves(state);
         expect(moves.length).toBeGreaterThan(0);
@@ -332,16 +336,17 @@ describe('full simulated matches', () => {
       const { state: next, events } = applyAction(state, action);
       if (events.some((e) => e.type === 'turnPassed')) sixMovesInARow = 0;
       log.push(action);
+      const prevState = state;
       state = next;
-      // After a move off a safe square, no lone opponent pawn is left where it landed;
-      // only safe pairs survive there.
+      // Landing off a safe square takes exactly one pawn from each other colour that was there.
       if (action.type === 'move') {
         const idx = trackIndexAt(seat, state.pawns[seat]![action.pawn]!);
         if (idx !== null && !TRACK[idx]!.safe)
           for (const s of state.seats) {
             if (s === seat) continue;
-            const here = state.pawns[s]!.filter((step) => trackIndexAt(s, step) === idx).length;
-            expect(here === 0 || here >= 2).toBe(true);
+            const before = prevState.pawns[s]!.filter((step) => trackIndexAt(s, step) === idx).length;
+            const after = state.pawns[s]!.filter((step) => trackIndexAt(s, step) === idx).length;
+            expect(after).toBe(Math.max(0, before - 1));
           }
       }
     }

@@ -6,7 +6,9 @@ export interface RoomView {
   code: string;
   variant: string;
   host: number;
-  players: { name: string; avatar: number; seat: Seat | null; connected: boolean; bot: boolean }[];
+  players: { name: string; avatar: number; seat: Seat | null; seats?: Seat[]; connected: boolean; bot: boolean }[];
+  /** The host's choices for a private room (older servers leave this out). */
+  settings?: { variant: string; dice: 1 | 2; pawns: 2 | 3 | 4; yards: 1 | 2; timer: 'normal' | 'relaxed' };
   match: MatchState | null;
   actionDeadline: number | null;
   public: boolean;

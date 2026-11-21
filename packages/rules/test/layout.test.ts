@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  rollFor,
   LANES,
   QUICK_RACE_RULES,
   TRACK,
@@ -173,7 +174,7 @@ describe('balance on larger boards', () => {
         const seat = state.turn.seat;
         state =
           state.turn.phase === 'roll'
-            ? applyAction(state, { type: 'roll', seat, value: dice.roll() }).state
+            ? applyAction(state, { type: 'roll', seat, ...rollFor(state, dice) }).state
             : applyAction(state, { type: 'move', seat, pawn: chooseMove(state, 'medium', random) }).state;
       }
       expect([...state.finishOrder].sort()).toEqual(Array.from({ length: players }, (_, i) => i));

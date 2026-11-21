@@ -1237,3 +1237,11 @@ button:focus-visible {
 .legal a {
   color: var(--gold-300);
 }
+
+/* ---------- private room rules ---------- */
+
+.room-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}

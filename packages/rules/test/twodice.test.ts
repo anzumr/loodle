@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  rollFor,
   QUICK_RACE_RULES,
   RuleError,
   YARD,
@@ -165,7 +166,7 @@ describe('two dice: whole matches', () => {
     for (let guard = 0; state.turn.phase !== 'over'; guard++) {
       if (guard > 60000) throw new Error('match did not finish');
       const seat = state.turn.seat;
-      if (state.turn.phase === 'roll') state = applyAction(state, { type: 'roll', seat, value: dice.roll(), value2: dice.roll() }).state;
+      if (state.turn.phase === 'roll') state = applyAction(state, { type: 'roll', seat, ...rollFor(state, dice) }).state;
       else {
         const m = chooseLegalMove(state, 'medium', random);
         state = applyAction(state, { type: 'move', seat, pawn: m.pawn, die: m.die }).state;
